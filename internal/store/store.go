@@ -95,9 +95,21 @@ type IntegrationRecord struct {
 	Detail             string
 }
 
+// VaultSnapshot is the encrypted state needed to restore a vault.
+type VaultSnapshot struct {
+	Meta        VaultMeta           `json:"vault_meta"`
+	Credentials []*model.Credential `json:"credentials"`
+	Versions    []*VersionRecord    `json:"credential_versions"`
+	Bindings    []*model.Binding    `json:"bindings"`
+	Principals  []*Principal        `json:"principals"`
+	Grants      []*model.Grant      `json:"grants"`
+}
+
 // Store 是 KeyKoi 的持久化接口。
 type Store interface {
 	Close() error
+
+	ReadVaultSnapshot(ctx context.Context) (VaultSnapshot, error)
 
 	VaultMeta(ctx context.Context) (*VaultMeta, error)
 	PutVaultMeta(ctx context.Context, meta *VaultMeta) error

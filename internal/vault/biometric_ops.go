@@ -15,6 +15,8 @@ const RootKeyLength = 32
 // UnlockWithRootKey 用系统保护存储取回的根密钥解锁，不需要主密码。
 // 它先用现有密文校验根密钥确实属于这个密钥库，避免「解锁成功但任何版本都无法解密」。
 func (v *Vault) UnlockWithRootKey(root []byte) error {
+	v.restoreMu.RLock()
+	defer v.restoreMu.RUnlock()
 	if len(root) != RootKeyLength {
 		return model.NewError(model.CodeVaultUnlockFailed, "root key must be %d bytes", RootKeyLength)
 	}

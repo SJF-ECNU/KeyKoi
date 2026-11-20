@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -17,8 +18,17 @@ import (
 
 // SQLite 是单机持久存储。敏感字段在写入前已由 vault 加密，这里只保存密文。
 type SQLite struct {
+	sqliteVaultReader
 	db   *sql.DB
 	path string
+}
+
+// The same queries serve ordinary reads and reads in the backup transaction.
+type sqliteVaultReader struct {
+	q interface {
+		QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+		QueryRowContext(context.Context, string, ...any) *sql.Row
+	}
 }
 
 const sqliteSchema = `
@@ -74,6 +84,7 @@ CREATE TABLE IF NOT EXISTS bindings (
 	token_field TEXT NOT NULL,
 	username_field TEXT NOT NULL,
 	password_field TEXT NOT NULL,
+ runtime_fields TEXT,
 	adapter_id TEXT NOT NULL,
 	route TEXT NOT NULL,
 	status TEXT NOT NULL,
@@ -180,6 +191,7 @@ func OpenSQLite(path string) (*SQLite, error) {
 	}
 	// 旧库升级：ALTER TABLE 补齐授权策略与审计验证字段，旧行取安全默认值。
 	for _, col := range []struct{ table, name, ddl string }{
+		{"bindings", "runtime_fields", `ALTER TABLE bindings ADD COLUMN runtime_fields TEXT`},
 		{"grants", "auth_requirement", `ALTER TABLE grants ADD COLUMN auth_requirement TEXT NOT NULL DEFAULT 'once'`},
 		{"audit_events", "auth_method", `ALTER TABLE audit_events ADD COLUMN auth_method TEXT NOT NULL DEFAULT 'none'`},
 		{"audit_events", "auth_result", `ALTER TABLE audit_events ADD COLUMN auth_result TEXT NOT NULL DEFAULT 'not_required'`},
@@ -211,7 +223,7 @@ func OpenSQLite(path string) (*SQLite, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	return &SQLite{db: db, path: path}, nil
+	return &SQLite{db: db, path: path, sqliteVaultReader: sqliteVaultReader{q: db}}, nil
 }
 
 // ensureColumn 在列缺失时执行 ALTER TABLE，使旧库无需重建即可继续使用。
@@ -259,8 +271,56 @@ func (s *SQLite) Close() error { return s.db.Close() }
 // DB 暴露底层连接，供测试执行只读检查。
 func (s *SQLite) DB() *sql.DB { return s.db }
 
-func (s *SQLite) VaultMeta(ctx context.Context) (*VaultMeta, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT schema_version, crypto_version, kdf_algorithm, kdf_salt, kdf_time, kdf_memory_kib, kdf_threads, wrapped_root_key, wrap_nonce, root_check, root_check_nonce, authorization_epoch, created_at FROM vault_meta WHERE id=1`)
+func (s *SQLite) ReadVaultSnapshot(ctx context.Context) (VaultSnapshot, error) {
+	var snap VaultSnapshot
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return snap, err
+	}
+	defer tx.Rollback()
+	reader := sqliteVaultReader{q: tx}
+	meta, err := reader.VaultMeta(ctx)
+	if err != nil {
+		return snap, err
+	}
+	snap.Meta = *meta
+	if snap.Credentials, err = reader.ListCredentials(ctx); err != nil {
+		return snap, err
+	}
+	if snap.Bindings, err = reader.ListBindings(ctx); err != nil {
+		return snap, err
+	}
+	if snap.Principals, err = reader.ListPrincipals(ctx); err != nil {
+		return snap, err
+	}
+	if snap.Grants, err = reader.ListGrants(ctx, ""); err != nil {
+		return snap, err
+	}
+	if snap.Versions, err = reader.listSnapshotVersions(ctx); err != nil {
+		return snap, err
+	}
+	return snap, tx.Commit()
+}
+
+func (s sqliteVaultReader) listSnapshotVersions(ctx context.Context) ([]*VersionRecord, error) {
+	rows, err := s.q.QueryContext(ctx, `SELECT credential_id, version, ciphertext, nonce, wrapped_dek, wrap_nonce, crypto_version, provider_expires_at, created_at FROM credential_versions ORDER BY credential_id, version`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*VersionRecord{}
+	for rows.Next() {
+		rec, err := scanVersion(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
+func (s sqliteVaultReader) VaultMeta(ctx context.Context) (*VaultMeta, error) {
+	row := s.q.QueryRowContext(ctx, `SELECT schema_version, crypto_version, kdf_algorithm, kdf_salt, kdf_time, kdf_memory_kib, kdf_threads, wrapped_root_key, wrap_nonce, root_check, root_check_nonce, authorization_epoch, created_at FROM vault_meta WHERE id=1`)
 	m := &VaultMeta{}
 	var created string
 	if err := row.Scan(&m.SchemaVersion, &m.CryptoVersion, &m.KDFAlgorithm, &m.KDFSalt, &m.KDFTime, &m.KDFMemoryKiB, &m.KDFThreads, &m.WrappedRootKey, &m.WrapNonce, &m.RootCheck, &m.RootCheckNonce, &m.AuthorizationEpoch, &created); err != nil {
@@ -375,8 +435,8 @@ func (s *SQLite) ReplaceVault(ctx context.Context, meta *VaultMeta, creds []*mod
 		}
 	}
 	for _, b := range bindings {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO bindings(id, credential_id, upstream_origin, allowed_paths, auth_scheme, auth_header, token_field, username_field, password_field, adapter_id, route, status, revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			b.ID, b.CredentialID, b.UpstreamOrigin, joinPaths(b.AllowedPaths), b.AuthScheme, b.AuthHeader, b.TokenField, b.UsernameField, b.PasswordField, b.AdapterID, b.Route, b.Status, b.Revision); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO bindings(`+bindingColumns+`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			b.ID, b.CredentialID, b.UpstreamOrigin, joinPaths(b.AllowedPaths), b.AuthScheme, b.AuthHeader, b.TokenField, b.UsernameField, b.PasswordField, bindingRuntimeFields(b.RuntimeFields), b.AdapterID, b.Route, b.Status, b.Revision); err != nil {
 			return err
 		}
 	}
@@ -409,8 +469,8 @@ func scanCredential(row scanner) (*model.Credential, error) {
 	return c, nil
 }
 
-func (s *SQLite) ListCredentials(ctx context.Context) ([]*model.Credential, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, kind, label, current_version, status, revision, provider_expires_at FROM credentials ORDER BY id`)
+func (s sqliteVaultReader) ListCredentials(ctx context.Context) ([]*model.Credential, error) {
+	rows, err := s.q.QueryContext(ctx, `SELECT id, kind, label, current_version, status, revision, provider_expires_at FROM credentials ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -620,27 +680,37 @@ func (s *SQLite) DeleteVersion(ctx context.Context, credentialID string, version
 	return nil
 }
 
+const bindingColumns = `id, credential_id, upstream_origin, allowed_paths, auth_scheme, auth_header, token_field, username_field, password_field, runtime_fields, adapter_id, route, status, revision`
+
+func bindingRuntimeFields(fields []string) any {
+	if fields == nil {
+		return nil
+	}
+	data, _ := json.Marshal(fields)
+	return string(data)
+}
+
 func (s *SQLite) PutBinding(ctx context.Context, b *model.Binding) error {
 	if b.Revision == 0 {
 		b.Revision = 1
 	}
 	paths := joinPaths(b.AllowedPaths)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO bindings(id, credential_id, upstream_origin, allowed_paths, auth_scheme, auth_header, token_field, username_field, password_field, adapter_id, route, status, revision)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(id) DO UPDATE SET credential_id=excluded.credential_id, upstream_origin=excluded.upstream_origin, allowed_paths=excluded.allowed_paths, auth_scheme=excluded.auth_scheme, auth_header=excluded.auth_header, token_field=excluded.token_field, username_field=excluded.username_field, password_field=excluded.password_field, adapter_id=excluded.adapter_id, route=excluded.route, status=excluded.status, revision=bindings.revision+1`,
-		b.ID, b.CredentialID, b.UpstreamOrigin, paths, b.AuthScheme, b.AuthHeader, b.TokenField, b.UsernameField, b.PasswordField, b.AdapterID, b.Route, b.Status, b.Revision)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO bindings(`+bindingColumns+`)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET credential_id=excluded.credential_id, upstream_origin=excluded.upstream_origin, allowed_paths=excluded.allowed_paths, auth_scheme=excluded.auth_scheme, auth_header=excluded.auth_header, token_field=excluded.token_field, username_field=excluded.username_field, password_field=excluded.password_field, runtime_fields=COALESCE(excluded.runtime_fields, bindings.runtime_fields), adapter_id=excluded.adapter_id, route=excluded.route, status=excluded.status, revision=bindings.revision+1`,
+		b.ID, b.CredentialID, b.UpstreamOrigin, paths, b.AuthScheme, b.AuthHeader, b.TokenField, b.UsernameField, b.PasswordField, bindingRuntimeFields(b.RuntimeFields), b.AdapterID, b.Route, b.Status, b.Revision)
 	return err
 }
 
 func (s *SQLite) GetBinding(ctx context.Context, id string) (*model.Binding, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, credential_id, upstream_origin, allowed_paths, auth_scheme, auth_header, token_field, username_field, password_field, adapter_id, route, status, revision FROM bindings WHERE id=?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT `+bindingColumns+` FROM bindings WHERE id=?`, id)
 	return scanBinding(row)
 }
 
 func (s *SQLite) GetBindingByRoute(ctx context.Context, route string) (*model.Binding, error) {
 	// 历史数据可能留下同路由的多条绑定：优先有效状态，再按 id 排序，
 	// 让选择结果与服务端唯一约束的意图一致且可复现。
-	row := s.db.QueryRowContext(ctx, `SELECT id, credential_id, upstream_origin, allowed_paths, auth_scheme, auth_header, token_field, username_field, password_field, adapter_id, route, status, revision FROM bindings WHERE route=?
+	row := s.db.QueryRowContext(ctx, `SELECT `+bindingColumns+` FROM bindings WHERE route=?
 		ORDER BY CASE WHEN status='active' THEN 0 ELSE 1 END, id LIMIT 1`, route)
 	return scanBinding(row)
 }
@@ -648,18 +718,24 @@ func (s *SQLite) GetBindingByRoute(ctx context.Context, route string) (*model.Bi
 func scanBinding(row scanner) (*model.Binding, error) {
 	b := &model.Binding{}
 	var paths string
-	if err := row.Scan(&b.ID, &b.CredentialID, &b.UpstreamOrigin, &paths, &b.AuthScheme, &b.AuthHeader, &b.TokenField, &b.UsernameField, &b.PasswordField, &b.AdapterID, &b.Route, &b.Status, &b.Revision); err != nil {
+	var runtimeFields sql.NullString
+	if err := row.Scan(&b.ID, &b.CredentialID, &b.UpstreamOrigin, &paths, &b.AuthScheme, &b.AuthHeader, &b.TokenField, &b.UsernameField, &b.PasswordField, &runtimeFields, &b.AdapterID, &b.Route, &b.Status, &b.Revision); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, err
 	}
 	b.AllowedPaths = splitPaths(paths)
+	if runtimeFields.Valid {
+		if err := json.Unmarshal([]byte(runtimeFields.String), &b.RuntimeFields); err != nil {
+			return nil, fmt.Errorf("decode binding runtime fields: %w", err)
+		}
+	}
 	return b, nil
 }
 
-func (s *SQLite) ListBindings(ctx context.Context) ([]*model.Binding, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, credential_id, upstream_origin, allowed_paths, auth_scheme, auth_header, token_field, username_field, password_field, adapter_id, route, status, revision FROM bindings ORDER BY id`)
+func (s sqliteVaultReader) ListBindings(ctx context.Context) ([]*model.Binding, error) {
+	rows, err := s.q.QueryContext(ctx, `SELECT `+bindingColumns+` FROM bindings ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -752,8 +828,8 @@ func (s *SQLite) GetPrincipal(ctx context.Context, id string) (*Principal, error
 	return p, nil
 }
 
-func (s *SQLite) ListPrincipals(ctx context.Context) ([]*Principal, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, identity_type, identity_reference, status, admin FROM principals ORDER BY id`)
+func (s sqliteVaultReader) ListPrincipals(ctx context.Context) ([]*Principal, error) {
+	rows, err := s.q.QueryContext(ctx, `SELECT id, identity_type, identity_reference, status, admin FROM principals ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -818,7 +894,7 @@ func (s *SQLite) GetGrant(ctx context.Context, id string) (*model.Grant, error) 
 	return g, nil
 }
 
-func (s *SQLite) ListGrants(ctx context.Context, principalID string) ([]*model.Grant, error) {
+func (s sqliteVaultReader) ListGrants(ctx context.Context, principalID string) ([]*model.Grant, error) {
 	q := `SELECT id, principal_id, binding_id, delivery_mode, max_lease_seconds, auth_requirement, status, revision FROM grants`
 	var args []any
 	if principalID != "" {
@@ -826,7 +902,7 @@ func (s *SQLite) ListGrants(ctx context.Context, principalID string) ([]*model.G
 		args = append(args, principalID)
 	}
 	q += ` ORDER BY id`
-	rows, err := s.db.QueryContext(ctx, q, args...)
+	rows, err := s.q.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

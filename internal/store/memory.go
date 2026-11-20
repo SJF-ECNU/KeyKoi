@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -37,6 +38,31 @@ func NewMemory() *Memory {
 }
 
 func (m *Memory) Close() error { return nil }
+
+func (m *Memory) ReadVaultSnapshot(ctx context.Context) (VaultSnapshot, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var snap VaultSnapshot
+	if m.meta == nil {
+		return snap, ErrNotFound
+	}
+	snap.Meta = *m.meta
+	snap.Credentials = m.listCredentials()
+	snap.Bindings = m.listBindings()
+	snap.Principals = m.listPrincipals()
+	snap.Grants = m.listGrants("")
+	snap.Versions = []*VersionRecord{}
+	for _, c := range snap.Credentials {
+		start := len(snap.Versions)
+		for _, rec := range m.versions[c.ID] {
+			cp := *rec
+			snap.Versions = append(snap.Versions, &cp)
+		}
+		versions := snap.Versions[start:]
+		sort.Slice(versions, func(i, j int) bool { return versions[i].Version < versions[j].Version })
+	}
+	return snap, nil
+}
 
 func (m *Memory) VaultMeta(context.Context) (*VaultMeta, error) {
 	m.mu.RLock()
@@ -142,13 +168,17 @@ func (m *Memory) GetCredential(_ context.Context, id string) (*model.Credential,
 func (m *Memory) ListCredentials(context.Context) ([]*model.Credential, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	return m.listCredentials(), nil
+}
+
+func (m *Memory) listCredentials() []*model.Credential {
 	out := make([]*model.Credential, 0, len(m.credentials))
 	for _, c := range m.credentials {
 		cp := *c
 		out = append(out, &cp)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out, nil
+	return out
 }
 
 func (m *Memory) UpdateCredentialStatus(_ context.Context, id string, status model.EntityStatus, revision int64) error {
@@ -319,9 +349,13 @@ func (m *Memory) PutBinding(_ context.Context, b *model.Binding) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cp := *b
+	cp.RuntimeFields = slices.Clone(b.RuntimeFields)
 	if existing, ok := m.bindings[b.ID]; ok {
 		// 与 SQLite 的 upsert 一致：每次更新都前进 revision，交付重校验才能发现改绑。
 		cp.Revision = existing.Revision + 1
+		if cp.RuntimeFields == nil {
+			cp.RuntimeFields = existing.RuntimeFields
+		}
 	} else {
 		if cp.Revision == 0 {
 			cp.Revision = 1
@@ -340,6 +374,7 @@ func (m *Memory) GetBinding(_ context.Context, id string) (*model.Binding, error
 		return nil, ErrNotFound
 	}
 	cp := *b
+	cp.RuntimeFields = slices.Clone(b.RuntimeFields)
 	return &cp, nil
 }
 
@@ -372,19 +407,25 @@ func (m *Memory) GetBindingByRoute(_ context.Context, route string) (*model.Bind
 		return nil, ErrNotFound
 	}
 	cp := *chosen
+	cp.RuntimeFields = slices.Clone(chosen.RuntimeFields)
 	return &cp, nil
 }
 
 func (m *Memory) ListBindings(context.Context) ([]*model.Binding, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	return m.listBindings(), nil
+}
+
+func (m *Memory) listBindings() []*model.Binding {
 	out := make([]*model.Binding, 0, len(m.bindings))
 	for _, b := range m.bindings {
 		cp := *b
+		cp.RuntimeFields = slices.Clone(b.RuntimeFields)
 		out = append(out, &cp)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out, nil
+	return out
 }
 
 func (m *Memory) UpdateBindingStatus(_ context.Context, id string, status model.EntityStatus, revision int64) error {
@@ -462,13 +503,17 @@ func (m *Memory) GetPrincipal(_ context.Context, id string) (*Principal, error) 
 func (m *Memory) ListPrincipals(context.Context) ([]*Principal, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	return m.listPrincipals(), nil
+}
+
+func (m *Memory) listPrincipals() []*Principal {
 	out := make([]*Principal, 0, len(m.principals))
 	for _, p := range m.principals {
 		cp := *p
 		out = append(out, &cp)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out, nil
+	return out
 }
 
 func (m *Memory) UpdatePrincipalStatus(_ context.Context, id string, status model.EntityStatus) error {
@@ -517,6 +562,10 @@ func (m *Memory) GetGrant(_ context.Context, id string) (*model.Grant, error) {
 func (m *Memory) ListGrants(_ context.Context, principalID string) ([]*model.Grant, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	return m.listGrants(principalID), nil
+}
+
+func (m *Memory) listGrants(principalID string) []*model.Grant {
 	var out []*model.Grant
 	for _, g := range m.grants {
 		if principalID == "" || g.PrincipalID == principalID {
@@ -525,7 +574,7 @@ func (m *Memory) ListGrants(_ context.Context, principalID string) ([]*model.Gra
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out, nil
+	return out
 }
 
 func (m *Memory) UpdateGrantStatus(_ context.Context, id string, status model.EntityStatus, revision int64) error {

@@ -69,6 +69,8 @@ type Vault struct {
 	st   store.Store
 	opts Options
 
+	// restoreMu keeps root-dependent operations on one side of a vault replacement.
+	restoreMu      sync.RWMutex
 	mu             sync.RWMutex
 	root           []byte
 	masterPassword []byte
@@ -114,6 +116,8 @@ func (v *Vault) Initialized() bool {
 
 // Init 用主密码建立根密钥。已初始化时返回冲突错误。
 func (v *Vault) Init(ctx context.Context, password []byte) error {
+	v.restoreMu.RLock()
+	defer v.restoreMu.RUnlock()
 	v.mu.Lock()
 	if v.initialized {
 		v.mu.Unlock()
@@ -166,6 +170,8 @@ func (v *Vault) Init(ctx context.Context, password []byte) error {
 
 // Unlock 用主密码解开根密钥。密码错误与数据损坏都明确失败，不回退。
 func (v *Vault) Unlock(ctx context.Context, password []byte) error {
+	v.restoreMu.RLock()
+	defer v.restoreMu.RUnlock()
 	meta, err := v.st.VaultMeta(ctx)
 	if err != nil {
 		return model.NewError(model.CodeVaultLocked, "vault is not initialized")
@@ -242,19 +248,11 @@ func (v *Vault) Locked() bool {
 func (v *Vault) State() string {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
-	if !v.initialized {
-		return "uninitialized"
-	}
-	if v.locked || v.root == nil {
-		return "locked"
-	}
-	return "unlocked"
+	return v.stateLocked()
 }
 
 // Describe 返回不含秘密的摘要。
 func (v *Vault) Describe() string {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
 	return fmt.Sprintf("encrypted vault: crypto_version=%d state=%s", cryptoVersion, v.State())
 }
 
@@ -266,6 +264,8 @@ func (v *Vault) Close() error {
 
 // Materialize 解密指定完整版本。锁定、缺失或解密失败都返回稳定错误。
 func (v *Vault) Materialize(ctx context.Context, credentialID string, version int) (model.CredentialVersion, error) {
+	v.restoreMu.RLock()
+	defer v.restoreMu.RUnlock()
 	v.mu.RLock()
 	root := append([]byte(nil), v.root...)
 	locked := v.locked
@@ -291,10 +291,13 @@ func (v *Vault) Materialize(ctx context.Context, credentialID string, version in
 
 // CreateCredential 加密并写入凭证索引与首个版本。
 func (v *Vault) CreateCredential(ctx context.Context, meta model.Credential, version model.CredentialVersion) (*model.Credential, error) {
+	v.restoreMu.RLock()
+	defer v.restoreMu.RUnlock()
 	root, err := v.rootKey()
 	if err != nil {
 		return nil, err
 	}
+	defer zeroBytes(root)
 	meta.CurrentVersion = 1
 	version.Version = 1
 	version.CredentialID = meta.ID
@@ -310,10 +313,13 @@ func (v *Vault) CreateCredential(ctx context.Context, meta model.Credential, ver
 
 // AddVersion 写入新版本并原子切换当前版本。
 func (v *Vault) AddVersion(ctx context.Context, credentialID string, version model.CredentialVersion) (*model.Credential, error) {
+	v.restoreMu.RLock()
+	defer v.restoreMu.RUnlock()
 	root, err := v.rootKey()
 	if err != nil {
 		return nil, err
 	}
+	defer zeroBytes(root)
 	cur, err := v.st.GetCredential(ctx, credentialID)
 	if err != nil {
 		return nil, model.NewError(model.CodeCredentialUnavailable, "credential %s is unavailable", credentialID)
@@ -337,10 +343,13 @@ func (v *Vault) AddVersion(ctx context.Context, credentialID string, version mod
 // ActivateVersionCAS 按预期 revision 写入新版本：revision 已变时返回 store.ErrConflict，
 // 用于把「记录未变」与「写入新版本」合并为一次原子提交。
 func (v *Vault) ActivateVersionCAS(ctx context.Context, credentialID string, version model.CredentialVersion, expectedRevision int64) (*model.Credential, error) {
+	v.restoreMu.RLock()
+	defer v.restoreMu.RUnlock()
 	root, err := v.rootKey()
 	if err != nil {
 		return nil, err
 	}
+	defer zeroBytes(root)
 	cur, err := v.st.GetCredential(ctx, credentialID)
 	if err != nil {
 		return nil, model.NewError(model.CodeCredentialUnavailable, "credential %s is unavailable", credentialID)
@@ -478,15 +487,10 @@ func randomID() string {
 
 // Snapshot 是密文备份的格式。备份只含密文与恢复所需元数据。
 type Snapshot struct {
-	Format        string                 `json:"format"`
-	SchemaVersion int                    `json:"schema_version"`
-	CreatedAt     time.Time              `json:"created_at"`
-	Meta          store.VaultMeta        `json:"vault_meta"`
-	Credentials   []*model.Credential    `json:"credentials"`
-	Versions      []*store.VersionRecord `json:"credential_versions"`
-	Bindings      []*model.Binding       `json:"bindings"`
-	Principals    []*store.Principal     `json:"principals"`
-	Grants        []*model.Grant         `json:"grants"`
+	Format        string    `json:"format"`
+	SchemaVersion int       `json:"schema_version"`
+	CreatedAt     time.Time `json:"created_at"`
+	store.VaultSnapshot
 }
 
 // Backup 写出密文备份文件（0600）。它不导出明文，也不包含运行时会话或许可。
@@ -494,38 +498,15 @@ func (v *Vault) Backup(ctx context.Context, path string) error {
 	if err := v.guardBackupTarget(path); err != nil {
 		return err
 	}
-	meta, err := v.st.VaultMeta(ctx)
-	if err != nil {
+	state, err := v.st.ReadVaultSnapshot(ctx)
+	if errors.Is(err, store.ErrNotFound) {
 		return model.NewError(model.CodeVaultLocked, "vault is not initialized")
 	}
-	creds, err := v.st.ListCredentials(ctx)
 	if err != nil {
 		return err
 	}
-	snap := Snapshot{Format: "keykoi-encrypted-backup", SchemaVersion: schemaVersion, CreatedAt: time.Now().UTC(), Meta: *meta,
-		Credentials: creds, Bindings: []*model.Binding{}, Principals: []*store.Principal{}, Grants: []*model.Grant{}, Versions: []*store.VersionRecord{}}
-	for _, c := range creds {
-		versions, err := v.st.ListVersions(ctx, c.ID)
-		if err != nil {
-			return err
-		}
-		for _, ver := range versions {
-			rec, err := v.st.GetVersion(ctx, c.ID, ver)
-			if err != nil {
-				return err
-			}
-			snap.Versions = append(snap.Versions, rec)
-		}
-	}
-	if snap.Bindings, err = v.st.ListBindings(ctx); err != nil {
-		return err
-	}
-	if snap.Principals, err = v.st.ListPrincipals(ctx); err != nil {
-		return err
-	}
-	if snap.Grants, err = v.st.ListGrants(ctx, ""); err != nil {
-		return err
-	}
+	snap := Snapshot{Format: "keykoi-encrypted-backup", SchemaVersion: schemaVersion,
+		CreatedAt: time.Now().UTC(), VaultSnapshot: state}
 	data, err := json.MarshalIndent(snap, "", "  ")
 	if err != nil {
 		return err
@@ -633,6 +614,8 @@ func (v *Vault) Restore(ctx context.Context, path string) (map[string]any, error
 	if err := validateSnapshot(&snap); err != nil {
 		return nil, err
 	}
+	v.restoreMu.Lock()
+	defer v.restoreMu.Unlock()
 	password, err := v.restorePassword()
 	if err != nil {
 		return nil, err

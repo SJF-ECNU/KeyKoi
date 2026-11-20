@@ -183,9 +183,11 @@ type Binding struct {
 	// AuthHeader 是注入头名称；bearer 固定 Authorization，api_key 默认 X-Api-Key。
 	AuthHeader string `json:"auth_header,omitempty"`
 	// TokenField / UsernameField / PasswordField 指定取哪个凭证字段。
-	TokenField    string       `json:"token_field,omitempty"`
-	UsernameField string       `json:"username_field,omitempty"`
-	PasswordField string       `json:"password_field,omitempty"`
+	TokenField    string `json:"token_field,omitempty"`
+	UsernameField string `json:"username_field,omitempty"`
+	PasswordField string `json:"password_field,omitempty"`
+	// RuntimeFields constrains raw delivery. Nil preserves existing unrestricted bindings.
+	RuntimeFields []string     `json:"runtime_fields"`
 	AdapterID     string       `json:"adapter_id,omitempty"`
 	Route         string       `json:"route,omitempty"`
 	Status        EntityStatus `json:"status"`

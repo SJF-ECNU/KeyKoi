@@ -203,8 +203,16 @@ func (d *Daemon) handleResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fields := map[string]string{}
-	for k, v := range authz.Version.Fields {
-		fields[k] = v.RevealString()
+	if allowed := authz.Binding.RuntimeFields; allowed != nil {
+		for _, name := range allowed {
+			if value, ok := authz.Version.Fields[name]; ok {
+				fields[name] = value.RevealString()
+			}
+		}
+	} else {
+		for name, value := range authz.Version.Fields {
+			fields[name] = value.RevealString()
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"lease":               authz.Lease,
