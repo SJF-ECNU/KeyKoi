@@ -711,7 +711,7 @@ function openBinding() {
   const active = state.credentials.filter(item => item.status === "active");
   if (!active.length) { notice("请先导入一个有效凭证。"); openCredential(); return; }
   const credential = field("凭证","credential",{items:active.map(item => [item.id,item.label])});
-  const route = field("路由名称","route",{placeholder:"例如 openai-dev",pattern:"[a-zA-Z0-9][a-zA-Z0-9_\\-]*"});
+  const route = field("路由名称","route",{placeholder:"例如 billing-dev",pattern:"[a-zA-Z0-9][a-zA-Z0-9_\\-]*"});
   const origin = field("目标服务地址","origin",{type:"url",placeholder:"https://api.example.com"});
   const scheme = field("上游认证","scheme",{items:schemes});
   const prefix = field("允许的路径前缀（可选）","paths",{placeholder:"例如 /v1",required:false});

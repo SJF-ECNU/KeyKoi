@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 常用密钥适配矩阵：模型 API Key（OpenAI / Anthropic / Gemini 风格）、Basic、
-# Git 凭证助手。使用受控上游与真实客户端库；不访问真实服务商。
+# 业务凭证矩阵：Bearer、自定义 Key 头、Basic、Git helper 和代理启动器。
+# 所有请求均使用本地受控上游。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -29,23 +29,21 @@ export NO_PROXY="127.0.0.1,localhost,::1" no_proxy="127.0.0.1,localhost,::1"
 unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy || true
 
 port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
-OAI_KEY="sk-keykoi-$(openssl rand -hex 10)"
-ANT_KEY="sk-ant-keykoi-$(openssl rand -hex 10)"
-GEM_KEY="gemini-keykoi-$(openssl rand -hex 10)"
+BEARER_KEY="billing-$(openssl rand -hex 10)"
+HEADER_KEY="inventory-$(openssl rand -hex 10)"
 BASIC_USER="elastic"
 BASIC_PASS="$(openssl rand -hex 10)"
 GIT_USER="x-access-token"
 GIT_PASS="ghp_keykoi_$(openssl rand -hex 10)"
 
-UP_OAI=$(port); UP_ANT=$(port); UP_GEM=$(port); UP_BASIC=$(port)
+UP_BEARER=$(port); UP_HEADER=$(port); UP_BASIC=$(port)
 UP_PIDS=""
-"$BIN/mockupstream" --addr "127.0.0.1:$UP_OAI" --expect "Bearer $OAI_KEY" >"$WORK/up-oai.log" 2>&1 & UP_PIDS="$UP_PIDS $!"
-"$BIN/mockupstream" --addr "127.0.0.1:$UP_ANT" --expect-header "x-api-key=$ANT_KEY" >"$WORK/up-ant.log" 2>&1 & UP_PIDS="$UP_PIDS $!"
-"$BIN/mockupstream" --addr "127.0.0.1:$UP_GEM" --expect-header "x-goog-api-key=$GEM_KEY" >"$WORK/up-gem.log" 2>&1 & UP_PIDS="$UP_PIDS $!"
+"$BIN/mockupstream" --addr "127.0.0.1:$UP_BEARER" --expect "Bearer $BEARER_KEY" >"$WORK/up-bearer.log" 2>&1 & UP_PIDS="$UP_PIDS $!"
+"$BIN/mockupstream" --addr "127.0.0.1:$UP_HEADER" --expect-header "x-inventory-key=$HEADER_KEY" >"$WORK/up-header.log" 2>&1 & UP_PIDS="$UP_PIDS $!"
 "$BIN/mockupstream" --addr "127.0.0.1:$UP_BASIC" --expect "Basic $(printf '%s:%s' "$BASIC_USER" "$BASIC_PASS" | base64)" >"$WORK/up-basic.log" 2>&1 & UP_PIDS="$UP_PIDS $!"
 for i in $(seq 1 80); do
   ok=1
-  for p in "$UP_OAI" "$UP_ANT" "$UP_GEM" "$UP_BASIC"; do curl -fsS "http://127.0.0.1:$p/stats" >/dev/null 2>&1 || ok=0; done
+  for p in "$UP_BEARER" "$UP_HEADER" "$UP_BASIC"; do curl -fsS "http://127.0.0.1:$p/stats" >/dev/null 2>&1 || ok=0; done
   [ "$ok" = "1" ] && break; sleep 0.1
 done
 
@@ -72,9 +70,8 @@ seed() { # kind label binding route origin scheme header field...
   echo "$cred"
 }
 
-seed api_key     "openai key"        bind_openai    openai    "http://127.0.0.1:$UP_OAI"    bearer  ""               "token=$OAI_KEY"    >/dev/null
-seed api_key     "anthropic key"     bind_anthropic anthropic "http://127.0.0.1:$UP_ANT"    api_key x-api-key        "token=$ANT_KEY"    >/dev/null
-seed api_key     "gemini key"        bind_gemini    gemini    "http://127.0.0.1:$UP_GEM"    api_key x-goog-api-key   "token=$GEM_KEY"    >/dev/null
+seed api_key     "billing key"        bind_bearer    billing   "http://127.0.0.1:$UP_BEARER"    bearer  ""               "token=$BEARER_KEY"    >/dev/null
+seed api_key     "inventory key"     bind_header inventory "http://127.0.0.1:$UP_HEADER"    api_key x-inventory-key        "token=$HEADER_KEY"    >/dev/null
 seed database    "basic credential"  bind_basic     basic     "http://127.0.0.1:$UP_BASIC"  basic   ""               "username=$BASIC_USER" "password=$BASIC_PASS" >/dev/null
 seed api_key     "git token"         bind_git       git       "http://127.0.0.1:1"          basic   ""               "username=$GIT_USER" "password=$GIT_PASS" >/dev/null
 "$BIN/keykoi" --json grant add --principal "$PRINCIPAL" --binding bind_git --mode runtime_delivery --auth permanent --max-lease-seconds 300 >/dev/null
@@ -99,41 +96,22 @@ check() {
 }
 stat_of() { curl -sS "http://127.0.0.1:$1/stats"; }
 
-log "1) OpenAI SDK (Bearer + /v1/chat/completions)"
-cat > "$WORK/openai_client.py" <<'PY'
-import sys
-from openai import OpenAI
-client = OpenAI(base_url=sys.argv[1], api_key=sys.argv[2], max_retries=0)
-resp = client.chat.completions.create(model="keykoi-test", messages=[{"role": "user", "content": "ping"}])
-print(resp.choices[0].message.content)
-PY
-OAI_OUT="$(python3 "$WORK/openai_client.py" "http://$GW/gateway/openai/v1" "$TOKEN" 2>"$WORK/openai.err" || true)"
-check "OpenAI SDK call succeeds through gateway" "keykoi-ok" "$(printf '%s' "$OAI_OUT" | tail -1)"
-check "OpenAI upstream got the real Bearer key" "1" "$(stat_of "$UP_OAI" | python3 -c 'import json,sys;print(json.load(sys.stdin)["matched"])')"
+log "1) Bearer"
+BEARER_CODE=$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "http://$GW/gateway/billing/echo")
+check "Bearer client request accepted" "200" "$BEARER_CODE"
+check "upstream got the real Bearer key" "1" "$(stat_of "$UP_BEARER" | python3 -c 'import json,sys;print(json.load(sys.stdin)["matched"])')"
 
-log "2) Anthropic SDK (x-api-key + /v1/messages)"
-cat > "$WORK/anthropic_client.py" <<'PY'
-import sys
-from anthropic import Anthropic
-client = Anthropic(base_url=sys.argv[1], api_key=sys.argv[2], max_retries=0)
-msg = client.messages.create(model="keykoi-test", max_tokens=16, messages=[{"role": "user", "content": "ping"}])
-print(msg.content[0].text)
-PY
-ANT_OUT="$(python3 "$WORK/anthropic_client.py" "http://$GW/gateway/anthropic" "$TOKEN" 2>"$WORK/anthropic.err" || true)"
-check "Anthropic SDK call succeeds through gateway" "keykoi-ok" "$(printf '%s' "$ANT_OUT" | tail -1)"
-check "Anthropic upstream got the real x-api-key" "1" "$(stat_of "$UP_ANT" | python3 -c 'import json,sys;print(json.load(sys.stdin)["header_matched"])')"
+log "2) Custom API key header"
+HEADER_CODE=$(curl -sS -o /dev/null -w '%{http_code}' -H "X-Api-Key: $TOKEN" "http://$GW/gateway/inventory/echo")
+check "API key client request accepted" "200" "$HEADER_CODE"
+check "upstream got the real custom header value" "1" "$(stat_of "$UP_HEADER" | python3 -c 'import json,sys;print(json.load(sys.stdin)["header_matched"])')"
 
-log "3) Gemini-style header (x-goog-api-key carries the intermediary token)"
-GEM_CODE=$(curl -sS -o /dev/null -w '%{http_code}' -H "x-goog-api-key: $TOKEN" "http://$GW/gateway/gemini/echo")
-check "gemini-style request accepted" "200" "$GEM_CODE"
-check "Gemini upstream got the real x-goog-api-key" "1" "$(stat_of "$UP_GEM" | python3 -c 'import json,sys;print(json.load(sys.stdin)["header_matched"])')"
-
-log "4) Basic auth credential"
+log "3) Basic auth credential"
 BASIC_CODE=$(curl -sS -o /dev/null -w '%{http_code}' -H "X-KeyKoi-Session: $TOKEN" "http://$GW/gateway/basic/echo")
 check "basic-auth request accepted" "200" "$BASIC_CODE"
 check "upstream got the real Basic credential" "1" "$(stat_of "$UP_BASIC" | python3 -c 'import json,sys;print(json.load(sys.stdin)["matched"])')"
 
-log "5) Git credential helper (git credential fill)"
+log "4) Git credential helper (git credential fill)"
 cat > "$HOME_DIR/.gitconfig" <<EOF
 [credential]
 	helper = "!$BIN/keykoi helper git --binding bind_git"
@@ -143,50 +121,49 @@ check "git credential fill returns the username" "username=$GIT_USER" "$(printf 
 check "git credential fill returns the token as password" "password=$GIT_PASS" "$(printf '%s' "$GIT_OUT" | grep '^password=' || true)"
 check "git helper did not leak KeyKoi token to stdout" "0" "$(printf '%s' "$GIT_OUT" | grep -c 'kks_' || true)"
 
-log "6) 服务进程：仅注入会话令牌与网关地址（proxy 模式）"
+log "5) 服务进程：仅注入会话令牌与网关地址（proxy 模式）"
 cat > "$WORK/service.py" <<'PY'
 import json, os, sys, urllib.request
-base = os.environ["OPENAI_BASE_URL"]
-key = os.environ["OPENAI_API_KEY"]
+base = os.environ["SERVICE_BASE_URL"]
+key = os.environ["SERVICE_SESSION_TOKEN"]
 if not key.startswith("kks_"):
     print("UNEXPECTED_KEY_PREFIX", file=sys.stderr); sys.exit(3)
-body = json.dumps({"model": "keykoi-test", "messages": [{"role": "user", "content": "hi"}]}).encode()
-req = urllib.request.Request(base + "/v1/chat/completions", data=body,
-                             headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
+req = urllib.request.Request(base + "/echo", headers={"Authorization": "Bearer " + key})
 with urllib.request.urlopen(req) as resp:
-    print(json.load(resp)["choices"][0]["message"]["content"])
+    print(json.load(resp)["matched"])
 PY
-"$BIN/keykoi" --json run --mode proxy --route openai --exe "$(command -v python3)" \
-  --env OPENAI_API_KEY=runtime:session_token \
-  --env OPENAI_BASE_URL=runtime:gateway_route \
+"$BIN/keykoi" --json run --mode proxy --route billing --exe "$(command -v python3)" \
+  --env SERVICE_SESSION_TOKEN=runtime:session_token \
+  --env SERVICE_BASE_URL=runtime:gateway_route \
   --report "$WORK/service-run.json" -- "$WORK/service.py" >"$WORK/service.out" 2>"$WORK/service.err" || true
-check "service launched via proxy launcher gets a response" "keykoi-ok" "$(tail -1 "$WORK/service.out")"
-check "service only holds the intermediary token" "0" "$(grep -c "$OAI_KEY" "$WORK/service.out" || true)"
+check "service launched via proxy launcher gets a response" "True" "$(tail -1 "$WORK/service.out")"
+check "service only holds the intermediary token" "0" "$(grep -c "$BEARER_KEY" "$WORK/service.out" || true)"
 check "proxy launcher holds no credential lease" "" "$(python3 -c "import json;print(json.load(open('$WORK/service-run.json')).get('lease_id',''))" 2>/dev/null || echo missing)"
-check "service requests reached the OpenAI upstream" "2" "$(stat_of "$UP_OAI" | python3 -c 'import json,sys;print(json.load(sys.stdin)["matched"])')"
+check "service requests reached the billing upstream" "2" "$(stat_of "$UP_BEARER" | python3 -c 'import json,sys;print(json.load(sys.stdin)["matched"])')"
 
-log "7) negative paths"
-NOAUTH=$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{}' "http://$GW/gateway/openai/v1/chat/completions")
+log "6) negative paths"
+NOAUTH=$(curl -sS -o /dev/null -w '%{http_code}' "http://$GW/gateway/billing/echo")
 check "request without session token rejected" "401" "$NOAUTH"
+RETIRED=$(curl -sS -o /dev/null -w '%{http_code}' -H "X-Goog-Api-Key: $TOKEN" "http://$GW/gateway/billing/echo")
+check "retired header alone cannot open a session" "401" "$RETIRED"
 BADROUTE=$(curl -sS -o /dev/null -w '%{http_code}' -H "X-KeyKoi-Session: $TOKEN" "http://$GW/gateway/unregistered/echo")
 check "unregistered route rejected" "404" "$BADROUTE"
-LEAKED="$(for p in "$UP_OAI" "$UP_ANT" "$UP_GEM" "$UP_BASIC"; do stat_of "$p" | python3 -c 'import json,sys;print(json.load(sys.stdin)["session_tokens"])'; done | paste -sd+ - | bc)"
+LEAKED="$(for p in "$UP_BEARER" "$UP_HEADER" "$UP_BASIC"; do stat_of "$p" | python3 -c 'import json,sys;print(json.load(sys.stdin)["session_tokens"])'; done | paste -sd+ - | bc)"
 check "no upstream ever saw the intermediary token" "0" "$LEAKED"
 
-VERSIONS="$(python3 -c 'import openai,anthropic;print(f"openai={openai.__version__} anthropic={anthropic.__version__}")' 2>/dev/null || echo unknown)"
-python3 - "$OUT_DIR/result.json" "$VERSIONS" "${CHECKS[@]}" <<'PY'
+python3 - "$OUT_DIR/result.json" "${CHECKS[@]}" <<'PY'
 import json, sys
 out = {
   "phase": "keys-matrix",
   "environment": {
     "os": "macOS 27.0 arm64",
-    "clients": sys.argv[2],
+    "clients": "curl, Git, Python standard library",
     "upstream": "controlled mock upstreams (one per key shape)",
     "note": "未使用真实服务商密钥；所有密钥运行时生成。",
   },
   "checks": [],
 }
-for raw in sys.argv[3:]:
+for raw in sys.argv[2:]:
     st, name, detail = raw.split("|", 2)
     out["checks"].append({"status": st, "name": name, "detail": detail})
 out["summary"] = {"total": len(out["checks"]), "failed": sum(1 for c in out["checks"] if c["status"] != "PASS")}

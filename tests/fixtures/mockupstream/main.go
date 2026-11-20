@@ -138,33 +138,6 @@ func main() {
 	st := &stats{}
 	mux := http.NewServeMux()
 
-	// OpenAI 兼容客户端会解析这个响应；返回最小可用结构。
-	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
-		st.observe(r, *expect)
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id": "chatcmpl-keykoi", "object": "chat.completion", "created": time.Now().Unix(),
-			"model": "keykoi-test",
-			"choices": []map[string]any{{
-				"index": 0, "finish_reason": "stop",
-				"message": map[string]any{"role": "assistant", "content": "keykoi-ok"},
-			}},
-			"usage": map[string]any{"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
-		})
-	})
-
-	// Anthropic 兼容客户端解析这个结构。
-	mux.HandleFunc("/v1/messages", func(w http.ResponseWriter, r *http.Request) {
-		st.observe(r, *expect)
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id": "msg_keykoi", "type": "message", "role": "assistant", "model": "keykoi-test",
-			"content": []map[string]any{{"type": "text", "text": "keykoi-ok"}},
-			"stop_reason": "end_turn",
-			"usage":       map[string]any{"input_tokens": 3, "output_tokens": 2},
-		})
-	})
-
 	mux.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
 		matched := st.observe(r, *expect)
 		w.Header().Set("Content-Type", "application/json")
