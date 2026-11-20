@@ -24,6 +24,7 @@ package dbproxy
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -39,8 +40,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgproto3"
 
-	"keykoi/internal/ipcclient"
 	"keykoi/internal/model"
+	"keykoi/internal/osruntime"
+	"keykoi/internal/proxylease"
 	"keykoi/internal/secret"
 )
 
@@ -56,16 +58,8 @@ const (
 	codeAdminShutdown       = "57P01"
 )
 
-// Broker 是代理访问后台运行面的最小接口。*ipcclient.Client 直接满足它。
-//
-// 只有一次授权：Resolve 的返回同时带来凭证字段与校验过的 Binding 快照。
-// 代理不另行列出绑定：分开读取会让目标与密钥来自不同版本。
-type Broker interface {
-	// Resolve 用会话令牌换取向上游认证所需的凭证字段与同一次授权的 Binding。
-	Resolve(token, bindingID, mode string) (*ipcclient.Resolved, error)
-	// Get 读取单条绑定元数据，供既有连接核对改绑；它不返回凭证，也不建立许可。
-	Get(path string, out any) error
-}
+// Broker is the local authority used by the daemon-owned adapter.
+type Broker = proxylease.Authority
 
 // Config 配置代理。
 type Config struct {
@@ -113,7 +107,7 @@ func (c *Config) normalize() error {
 		c.DatabaseField = "database"
 	}
 	if c.UpstreamTLS == "" {
-		c.UpstreamTLS = TLSPrefer
+		c.UpstreamTLS = TLSRequire
 	}
 	if c.AuthTimeout <= 0 {
 		c.AuthTimeout = 15 * time.Second
@@ -121,9 +115,9 @@ func (c *Config) normalize() error {
 	if c.DialTimeout <= 0 {
 		c.DialTimeout = 10 * time.Second
 	}
-	if c.RevalidateInterval <= 0 || c.RevalidateInterval > bindingCheckInterval {
+	if c.RevalidateInterval <= 0 || c.RevalidateInterval > proxylease.Interval {
 		// 超过 1 秒的配置会削弱“改绑后最多 1 秒内被发现”的保证，统一收紧到上限。
-		c.RevalidateInterval = bindingCheckInterval
+		c.RevalidateInterval = proxylease.Interval
 	}
 	if c.MaxConnections <= 0 {
 		c.MaxConnections = 64
@@ -185,17 +179,7 @@ func (s *Server) Config() Config { return s.cfg }
 
 // Listen 绑定客户端监听地址。端口 0 时由系统分配，Addrs 给出实际地址。
 func (s *Server) Listen() error {
-	host, _, err := net.SplitHostPort(s.cfg.ListenAddr)
-	if err != nil {
-		return fmt.Errorf("dbproxy: invalid listen address %q: %w", s.cfg.ListenAddr, err)
-	}
-	if host != "" && host != "localhost" {
-		ip := net.ParseIP(host)
-		if ip == nil || !ip.IsLoopback() {
-			return fmt.Errorf("dbproxy: listen address %q must be a loopback address", s.cfg.ListenAddr)
-		}
-	}
-	ln, err := net.Listen("tcp", s.cfg.ListenAddr)
+	ln, err := osruntime.ListenLoopbackTCP(s.cfg.ListenAddr)
 	if err != nil {
 		return fmt.Errorf("dbproxy: listen: %w", err)
 	}
@@ -274,7 +258,7 @@ func (s *Server) Serve(ctx context.Context) error {
 				s.wg.Add(1)
 				go func() {
 					defer s.wg.Done()
-					s.handle(c)
+					s.handle(ctx, c)
 				}()
 			}
 		}(ln)
@@ -366,11 +350,12 @@ func (s *Server) Stats() (active, total, denied int64) {
 
 // WarmUp 用给定会话令牌做一次解析，缓存上游地址供取消请求转发使用。
 // 解析失败不阻止代理启动：每个客户端连接仍会独立授权。
-func (s *Server) WarmUp(token string) error {
-	target, err := s.resolveTarget(token, s.cfg.ClientUser)
+func (s *Server) WarmUp(ctx context.Context, token string) error {
+	target, err := s.resolveTarget(ctx, token, s.cfg.ClientUser)
 	if err != nil {
 		return err
 	}
+	defer target.use.Finish()
 	s.cacheUpstreamAddr(target.Addr)
 	return nil
 }
@@ -391,7 +376,7 @@ func (s *Server) cachedUpstreamAddr() (string, bool) {
 }
 
 // handle 处理一条客户端连接。
-func (s *Server) handle(conn net.Conn) {
+func (s *Server) handle(ctx context.Context, conn net.Conn) {
 	s.total.Add(1)
 	remote := conn.RemoteAddr().String()
 	if s.active.Add(1) > int64(s.cfg.MaxConnections) {
@@ -435,16 +420,18 @@ func (s *Server) handle(conn net.Conn) {
 		return
 	}
 
-	target, err := s.resolveTarget(token, startup.database)
+	target, err := s.resolveTarget(ctx, token, startup.database)
 	if err != nil {
 		s.denied.Add(1)
 		writeErrorFrame(conn, errorCodeOf(err), err.Error())
 		s.logger.Printf("db-proxy connection from %s denied: %v", remote, err)
 		return
 	}
+	defer target.use.Finish()
+	defer target.use.Track(conn)()
 	s.cacheUpstreamAddr(target.Addr)
 
-	up, err := dialUpstream(context.Background(), target, s.cfg.UpstreamTLS, s.cfg.UpstreamCA, s.cfg.DialTimeout)
+	up, err := dialUpstream(target.use.Context(), target, s.cfg.UpstreamTLS, s.cfg.UpstreamCA, s.cfg.DialTimeout)
 	if err != nil {
 		s.denied.Add(1)
 		writeErrorFrame(conn, codeConnectionFailure, "dbproxy: upstream connection failed (TLS or network); details are in the keykoi db-proxy log")
@@ -452,9 +439,10 @@ func (s *Server) handle(conn net.Conn) {
 		return
 	}
 	defer up.close()
+	defer target.use.Track(up.conn)()
 
 	// 上游认证有独立截止时间：上游接受连接但不回包时，读取不会无限挂起。
-	upCtx, cancelUp := context.WithTimeout(context.Background(), s.cfg.AuthTimeout)
+	upCtx, cancelUp := context.WithTimeout(target.use.Context(), s.cfg.AuthTimeout)
 	upDeadline, _ := upCtx.Deadline()
 	_ = up.conn.SetDeadline(upDeadline)
 	passthrough, err := up.startup(upCtx)
@@ -573,78 +561,59 @@ func (s *Server) requestToken(conn net.Conn, reader *bufio.Reader) (string, erro
 
 // resolveTarget 用一次授权换取目标与凭证：Binding 快照只从 resolved.Binding 取，
 // 不再单独读取 /v1/bindings。这样改绑（origin 变更）时不会把新凭证发到旧目标。
-// 授权先于取值：没有覆盖 runtime_delivery 的许可时不会读到凭证。
-func (s *Server) resolveTarget(token, clientDatabase string) (UpstreamTarget, error) {
-	resolved, err := s.broker.Resolve(token, s.cfg.BindingID, string(model.ModeRuntimeDelivery))
-	if resolved != nil {
-		defer s.releaseLease(resolved)
-	}
+// 授权先于取值：没有覆盖 proxy 的许可时不会读到凭证。
+func (s *Server) resolveTarget(ctx context.Context, token, clientDatabase string) (UpstreamTarget, error) {
+	sessionToken := secret.New(token)
+	resolved, err := proxylease.Authorize(ctx, s.broker, sessionToken, s.cfg.BindingID, s.cfg.AuthTimeout)
 	if err != nil {
 		return UpstreamTarget{}, denialForResolveError(err)
 	}
-	binding, err := authorizedBinding(resolved, s.cfg.BindingID)
+	use, err := proxylease.Begin(s.broker, sessionToken, resolved, s.cfg.RevalidateInterval)
 	if err != nil {
 		return UpstreamTarget{}, err
 	}
-	origin, err := binding.Origin()
+	accepted := false
+	defer func() {
+		if !accepted {
+			use.Finish()
+		}
+	}()
+	binding, err := proxylease.Binding(resolved, s.cfg.BindingID)
+	if err != nil {
+		return UpstreamTarget{}, &proxyDenial{code: codeCannotConnectNow, message: err.Error()}
+	}
+	target, err := binding.DatabaseTarget(model.ProtocolPostgres, "5432")
 	if err != nil {
 		return UpstreamTarget{}, &proxyDenial{code: codeConnectionFailure, message: err.Error()}
 	}
-	host := origin.Hostname()
-	port := origin.Port()
-	if port == "" {
-		port = "5432"
-	}
-	if host == "" {
-		return UpstreamTarget{}, &proxyDenial{code: codeConnectionFailure, message: "binding has no upstream host"}
-	}
 
-	userField := firstNonEmpty(s.cfg.UsernameField, binding.UsernameField, "username")
-	passField := firstNonEmpty(s.cfg.PasswordField, binding.PasswordField, "password")
-	user := resolved.Fields[userField]
-	password := resolved.Fields[passField]
-	if user == "" || password == "" {
+	userField := cmp.Or(s.cfg.UsernameField, binding.UsernameField, "username")
+	passField := cmp.Or(s.cfg.PasswordField, binding.PasswordField, "password")
+	user := resolved.Version.Fields[userField].RevealString()
+	password := resolved.Version.Fields[passField]
+	if user == "" || password.IsEmpty() {
 		return UpstreamTarget{}, &proxyDenial{
 			code:    codeCannotConnectNow,
 			message: fmt.Sprintf("credential is missing fields %q/%q for the database adapter", userField, passField),
 		}
 	}
-	database := resolved.Fields[s.cfg.DatabaseField]
+	database := resolved.Version.Fields[s.cfg.DatabaseField].RevealString()
 	if database == "" {
 		database = clientDatabase
 	}
 	if database == "" {
 		database = user
 	}
+	accepted = true
 	return UpstreamTarget{
-		Host:           host,
-		Port:           port,
-		User:           user,
-		Password:       secret.New(password),
-		Database:       database,
-		Addr:           net.JoinHostPort(host, port),
-		Revision:       binding.Revision,
-		UpstreamOrigin: binding.UpstreamOrigin,
+		Host:     target.Host,
+		Port:     target.Port,
+		User:     user,
+		Password: password,
+		Database: database,
+		Addr:     target.Address(),
+		use:      use,
 	}, nil
-}
-
-// authorizedBinding 取出这次授权校验过的 Binding 快照。
-// 缺失或不是本代理绑定的快照都按授权失败处理，绝不回落到另一次读取。
-func authorizedBinding(resolved *ipcclient.Resolved, bindingID string) (*model.Binding, error) {
-	if resolved == nil || resolved.Binding == nil {
-		return nil, &proxyDenial{code: codeCannotConnectNow, message: "authorization returned no binding snapshot"}
-	}
-	binding := resolved.Binding
-	if binding.ID != "" && binding.ID != bindingID {
-		return nil, &proxyDenial{
-			code:    codeCannotConnectNow,
-			message: "authorization returned a binding snapshot for another binding",
-		}
-	}
-	if binding.Status != "" && binding.Status != model.StatusActive {
-		return nil, &proxyDenial{code: codeCannotConnectNow, message: "binding is " + string(binding.Status)}
-	}
-	return binding, nil
 }
 
 // forwardCancel 把取消请求转到上游。取消包只含上游的后端 PID 与密钥，
@@ -670,26 +639,12 @@ func (s *Server) forwardCancel(packet []byte) {
 	s.logger.Printf("db-proxy cancel request forwarded to %s", addr)
 }
 
-// releaseLease 立即释放一次 Resolve 创建的许可；凭证与目标仍只使用同次返回的快照。
-func (s *Server) releaseLease(resolved *ipcclient.Resolved) {
-	if resolved == nil || resolved.Lease.ID == "" {
-		return
-	}
-	revoker, ok := s.broker.(interface{ RevokeLease(string) error })
-	if !ok {
-		return
-	}
-	if err := revoker.RevokeLease(resolved.Lease.ID); err != nil {
-		s.logger.Printf("db-proxy revoke lease: %v", err)
-	}
-}
-
 // relay 在认证完成后按字节双向转发。代理不解析 SQL，权限由上游数据库负责。
 //
 // 客户端→上游方向同时承担改绑核对：每一轮转发前后按时间戳判断是否到点，
 // 到点用 Get 读一次绑定详情（最多每秒一次），不另起后台 goroutine。
 func (s *Server) relay(conn net.Conn, clientReader *bufio.Reader, up *upstream) {
-	watch := s.newBindingWatch(up.target)
+	watch := up.target.use
 
 	done := make(chan struct{}, 2)
 	go func() {
@@ -716,15 +671,15 @@ func (s *Server) relay(conn net.Conn, clientReader *bufio.Reader, up *upstream) 
 //
 // 读截止时间只用来按时唤醒核对：空闲连接按 RevalidateInterval 超时一次，
 // 有数据时立即继续转发，字节流语义不变。
-func (s *Server) copyClientToUpstream(conn net.Conn, clientReader *bufio.Reader, up *upstream, watch *bindingWatch) {
+func (s *Server) copyClientToUpstream(conn net.Conn, clientReader *bufio.Reader, up *upstream, watch *proxylease.Use) {
 	buf := make([]byte, 32<<10)
 	for {
-		if watch.due(time.Now()) && watch.changed() {
+		if watch.Changed() {
 			// 协议层先回错误再断开：客户端能看到明确原因，不必等 socket 重置。
 			writeErrorFrame(conn, codeAdminShutdown, "dbproxy: binding authorization changed; reconnect")
 			return
 		}
-		if err := conn.SetReadDeadline(time.Now().Add(watch.interval)); err != nil {
+		if err := conn.SetReadDeadline(time.Now().Add(watch.Interval)); err != nil {
 			return
 		}
 		n, err := clientReader.Read(buf)
@@ -840,15 +795,6 @@ func parseStartupParameters(body []byte) (map[string]string, error) {
 	return params, nil
 }
 
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 func isClosedErr(err error) bool {
 	if err == nil {
 		return false
@@ -869,18 +815,15 @@ func isTimeoutErr(err error) bool {
 // denialForResolveError 把后台稳定错误码映射为客户端可见的 PostgreSQL SQLSTATE。
 // 授权不足或令牌无效统一表现为认证失败，避免向客户端泄漏授权细节。
 func denialForResolveError(err error) error {
-	var apiErr *ipcclient.APIError
-	if errors.As(err, &apiErr) {
-		switch model.Code(apiErr.Code) {
-		case model.CodeSessionInvalid, model.CodeUseNotAllowed, model.CodeLeaseExpired:
-			return &proxyDenial{code: codeInvalidPassword, message: "session token is not authorized to use this binding"}
-		case model.CodeBindingDisabled:
-			return &proxyDenial{code: codeCannotConnectNow, message: "binding is not available"}
-		case model.CodeVaultLocked:
-			return &proxyDenial{code: codeCannotConnectNow, message: "keykoi vault is locked"}
-		case model.CodeCredentialUnavailable:
-			return &proxyDenial{code: codeCannotConnectNow, message: "credential is unavailable"}
-		}
+	switch proxylease.ErrorCode(err) {
+	case model.CodeSessionInvalid, model.CodeUseNotAllowed, model.CodeLeaseExpired:
+		return &proxyDenial{code: codeInvalidPassword, message: "session token is not authorized to use this binding"}
+	case model.CodeBindingDisabled:
+		return &proxyDenial{code: codeCannotConnectNow, message: "binding is not available"}
+	case model.CodeVaultLocked:
+		return &proxyDenial{code: codeCannotConnectNow, message: "keykoi vault is locked"}
+	case model.CodeCredentialUnavailable:
+		return &proxyDenial{code: codeCannotConnectNow, message: "credential is unavailable"}
 	}
-	return &proxyDenial{code: codeCannotConnectNow, message: "keykoid resolve failed: " + err.Error()}
+	return &proxyDenial{code: codeCannotConnectNow, message: "keykoid authorization failed"}
 }

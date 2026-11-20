@@ -29,7 +29,6 @@ func New(socket, adminToken string) *Client {
 			var d net.Dialer
 			return d.DialContext(ctx, "unix", socket)
 		},
-		DisableKeepAlives: false,
 	}
 	return &Client{
 		socket:     socket,
@@ -94,6 +93,45 @@ func (c *Client) doContext(ctx context.Context, method, path string, body, out a
 	return nil
 }
 
+// OpenStream decodes the initial reply and keeps an IPC-owned operation alive
+// until the caller closes the response body or cancels the context.
+func (c *Client) OpenStream(ctx context.Context, path string, body, initial any) (io.ReadCloser, error) {
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://keykoi.local"+path, bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-KeyKoi-Admin", c.adminToken)
+	transport := c.http.Transport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = 30 * time.Second
+	transport.DisableKeepAlives = true
+	client := &http.Client{Transport: transport}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	dec := json.NewDecoder(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode >= 400 {
+		defer resp.Body.Close()
+		var wrapper struct {
+			Error APIError `json:"error"`
+		}
+		if dec.Decode(&wrapper) == nil && wrapper.Error.Message != "" {
+			return nil, &wrapper.Error
+		}
+		return nil, fmt.Errorf("keykoid returned HTTP %d", resp.StatusCode)
+	}
+	if err := dec.Decode(initial); err != nil {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("decode keykoid stream: %w", err)
+	}
+	return resp.Body, nil
+}
+
 // Status 返回后台状态。
 func (c *Client) Status() (map[string]any, error) {
 	var out map[string]any
@@ -115,31 +153,7 @@ func (c *Client) CreateSession(purpose string, admin bool) (*Session, error) {
 
 // CreateSessionTTL 建立指定有效期的会话（上限由后台限制为 24 小时）。
 func (c *Client) CreateSessionTTL(purpose string, admin bool, ttl time.Duration) (*Session, error) {
-	body := map[string]any{"purpose": purpose}
-	if ttl > 0 {
-		body["ttl_seconds"] = int64(ttl.Seconds())
-	}
-	if admin {
-		if c.adminToken == "" {
-			return nil, fmt.Errorf("administrator token is not available")
-		}
-		body["admin_proof"] = c.adminToken
-	}
-	var out struct {
-		Session json.RawMessage `json:"session"`
-		Token   string          `json:"token"`
-	}
-	if err := c.do(http.MethodPost, "/v1/sessions", body, &out); err != nil {
-		return nil, err
-	}
-	var meta struct {
-		ID        string    `json:"id"`
-		ExpiresAt time.Time `json:"expires_at"`
-	}
-	if err := json.Unmarshal(out.Session, &meta); err != nil {
-		return nil, err
-	}
-	return &Session{ID: meta.ID, ExpiresAt: meta.ExpiresAt, Token: out.Token}, nil
+	return c.CreateSessionContext(context.Background(), purpose, admin, ttl)
 }
 
 // Resolved 是原始值交付结果，只在受信通道内使用。
@@ -211,11 +225,6 @@ func (c *Client) CreateSessionContext(ctx context.Context, purpose string, admin
 		return nil, err
 	}
 	return &Session{ID: meta.ID, ExpiresAt: meta.ExpiresAt, Token: out.Token}, nil
-}
-
-// RevokeLease 撤销一次用钥许可。
-func (c *Client) RevokeLease(leaseID string) error {
-	return c.do(http.MethodPost, "/v1/use-leases/revoke", map[string]any{"lease_id": leaseID}, nil)
 }
 
 // RecordAudit 上报一条不含秘密的使用结果，供代理把本地决定写入主服务审计。

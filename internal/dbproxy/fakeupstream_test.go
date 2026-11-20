@@ -2,6 +2,7 @@ package dbproxy
 
 import (
 	"bufio"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/hmac"
@@ -26,8 +27,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgproto3"
 
+	"keykoi/internal/broker"
 	"keykoi/internal/ipcclient"
 	"keykoi/internal/model"
+	"keykoi/internal/secret"
 )
 
 // fakeUpstream 是内存实现的 pgwire 服务端：真实跑启动包、SCRAM/MD5/cleartext 认证、
@@ -512,11 +515,22 @@ func (b *fakeBroker) failGets(err error) {
 	b.getErr = err
 }
 
-func (b *fakeBroker) RevokeLease(leaseID string) error {
+func (b *fakeBroker) CheckLease(_ context.Context, _ secret.Value, lease model.UseLease) error {
+	var binding model.Binding
+	if err := b.Get("/v1/bindings/"+lease.BindingID, &binding); err != nil {
+		return err
+	}
+	if (binding.Status != "" && binding.Status != model.StatusActive) ||
+		binding.Revision != lease.BindingRevision || binding.UpstreamOrigin != lease.Target {
+		return model.NewError(model.CodeBindingDisabled, "binding changed")
+	}
+	return nil
+}
+
+func (b *fakeBroker) ReleaseLease(leaseID string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.revoked = append(b.revoked, leaseID)
-	return nil
 }
 
 func (b *fakeBroker) leaseCounts() (resolved, revoked int) {
@@ -560,11 +574,12 @@ func (b *fakeBroker) Get(path string, out any) error {
 	return &ipcclient.APIError{Code: string(model.CodeBindingDisabled), Message: "binding is not registered"}
 }
 
-func (b *fakeBroker) Resolve(token, bindingID, mode string) (*ipcclient.Resolved, error) {
+func (b *fakeBroker) Authorize(_ context.Context, req broker.Request) (*broker.Authorization, error) {
+	token, mode := req.Token.RevealString(), string(req.Mode)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.calls++
-	if mode != string(model.ModeRuntimeDelivery) {
+	if mode != string(model.ModeProxy) {
 		return nil, fmt.Errorf("fake broker: unexpected mode %q", mode)
 	}
 	if b.denial != nil {
@@ -575,29 +590,27 @@ func (b *fakeBroker) Resolve(token, bindingID, mode string) (*ipcclient.Resolved
 	}
 	found := false
 	for _, bd := range b.bindings {
-		if bd.ID == bindingID {
+		if bd.ID == req.BindingID {
 			found = true
 		}
 	}
 	if !found {
 		return nil, &ipcclient.APIError{Code: string(model.CodeBindingDisabled), Message: "binding is not registered"}
 	}
-	fields := map[string]string{}
+	fields := map[string]secret.Value{}
 	for k, v := range b.fields {
-		fields[k] = v
+		fields[k] = secret.New(v)
 	}
 	snapshot := b.bindings[0]
 	if b.authorized != nil {
 		snapshot = *b.authorized
 	}
-	return &ipcclient.Resolved{
-		CredentialID:      "cred_test",
-		CredentialVersion: 1,
-		Fields:            fields,
-		Binding:           &snapshot,
+	return &broker.Authorization{
+		Version: model.CredentialVersion{CredentialID: "cred_test", Version: 1, Fields: fields},
+		Binding: &snapshot,
 		Lease: model.UseLease{
 			ID:              fmt.Sprintf("lease-%d", b.calls),
-			BindingRevision: snapshot.Revision,
+			BindingRevision: snapshot.Revision, BindingID: snapshot.ID, Target: snapshot.UpstreamOrigin, UseLeaseExpiresAt: time.Now().Add(time.Minute),
 		},
 	}, nil
 }

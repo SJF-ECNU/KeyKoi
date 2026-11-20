@@ -23,8 +23,10 @@ import (
 	"testing"
 	"time"
 
+	"keykoi/internal/broker"
 	"keykoi/internal/ipcclient"
 	"keykoi/internal/model"
+	"keykoi/internal/secret"
 )
 
 // fakeBroker 是 IPC 的测试替身。Resolve 返回凭证与同一次授权的 Binding 快照；
@@ -87,11 +89,22 @@ func (b *fakeBroker) failGets(err error) {
 	b.getErr = err
 }
 
-func (b *fakeBroker) RevokeLease(leaseID string) error {
+func (b *fakeBroker) CheckLease(_ context.Context, _ secret.Value, lease model.UseLease) error {
+	var binding model.Binding
+	if err := b.Get("/v1/bindings/"+lease.BindingID, &binding); err != nil {
+		return err
+	}
+	if (binding.Status != "" && binding.Status != model.StatusActive) ||
+		binding.Revision != lease.BindingRevision || binding.UpstreamOrigin != lease.Target {
+		return model.NewError(model.CodeBindingDisabled, "binding changed")
+	}
+	return nil
+}
+
+func (b *fakeBroker) ReleaseLease(leaseID string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.revoked = append(b.revoked, leaseID)
-	return nil
 }
 
 func (b *fakeBroker) leaseCounts() (resolved, revoked int) {
@@ -100,7 +113,8 @@ func (b *fakeBroker) leaseCounts() (resolved, revoked int) {
 	return b.calls, len(b.revoked)
 }
 
-func (b *fakeBroker) Resolve(token, bindingID, mode string) (*ipcclient.Resolved, error) {
+func (b *fakeBroker) Authorize(_ context.Context, req broker.Request) (*broker.Authorization, error) {
+	token, mode := req.Token.RevealString(), string(req.Mode)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.calls++
@@ -110,19 +124,19 @@ func (b *fakeBroker) Resolve(token, bindingID, mode string) (*ipcclient.Resolved
 	if token != "kks_test_token" {
 		return nil, &ipcclient.APIError{Code: string(model.CodeSessionInvalid), Message: "session is invalid"}
 	}
-	if mode != string(model.ModeRuntimeDelivery) {
+	if mode != string(model.ModeProxy) {
 		return nil, &ipcclient.APIError{Code: string(model.CodeUseNotAllowed), Message: "mode not allowed"}
 	}
-	out := &ipcclient.Resolved{Fields: map[string]string{}}
+	out := &broker.Authorization{Version: model.CredentialVersion{Fields: map[string]secret.Value{}}}
 	for k, v := range b.fields {
-		out.Fields[k] = v
+		out.Version.Fields[k] = secret.New(v)
 	}
 	snapshot := b.binding
 	if b.authorized != nil {
 		snapshot = *b.authorized
 	}
 	out.Binding = &snapshot
-	out.Lease = model.UseLease{ID: fmt.Sprintf("lease-%d", b.calls), BindingRevision: snapshot.Revision}
+	out.Lease = model.UseLease{ID: fmt.Sprintf("lease-%d", b.calls), BindingRevision: snapshot.Revision, BindingID: snapshot.ID, Target: snapshot.UpstreamOrigin, UseLeaseExpiresAt: time.Now().Add(time.Minute)}
 	return out, nil
 }
 
@@ -455,7 +469,7 @@ func TestWrongTokenRejected(t *testing.T) {
 func TestNoGrantRejected(t *testing.T) {
 	up := newFakeRedis(t, "s3cret-upstream")
 	broker := &fakeBroker{
-		resolveErr: &ipcclient.APIError{Code: string(model.CodeUseNotAllowed), Message: "no runtime_delivery grant"},
+		resolveErr: &ipcclient.APIError{Code: string(model.CodeUseNotAllowed), Message: "no proxy grant"},
 		binding: model.Binding{
 			ID: "bind_redis_test", UpstreamOrigin: "http://" + up.addr(), Status: model.StatusActive,
 		},
@@ -785,8 +799,16 @@ func TestProxyEndsConnectionWhenBindingRevisionChanges(t *testing.T) {
 		t.Fatal("the revised target was contacted on the old connection")
 	}
 	// 旧连接不做第二次授权：许可只在建立时创建并已经释放。
-	if resolved, revoked := broker.leaseCounts(); resolved != 1 || revoked != 1 {
-		t.Fatalf("existing connection re-authorized: resolved=%d revoked=%d", resolved, revoked)
+	deadline := time.Now().Add(time.Second)
+	for {
+		resolved, finished := broker.leaseCounts()
+		if resolved == 1 && finished == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected one completed execution, got resolved=%d finished=%d", resolved, finished)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -1192,4 +1214,13 @@ func testTLSMaterials(t *testing.T) (string, tls.Certificate) {
 		t.Fatalf("write CA: %v", err)
 	}
 	return caPath, tls.Certificate{Certificate: [][]byte{leafDER}, PrivateKey: leafKey}
+}
+
+func TestRewriteHelloPreservesOptionValues(t *testing.T) {
+	target := UpstreamTarget{Password: secret.New("test-upstream-password")}
+	args := []string{"HELLO", "3", "SETNAME", "test-client", "AUTH", "default", "test-token"}
+	want := encodeCommand([]string{"HELLO", "3", "SETNAME", "test-client", "AUTH", "default", "test-upstream-password"})
+	if got := rewriteAuth(encodeCommand(args), args, target); string(got) != string(want) {
+		t.Fatal("HELLO rewrite must preserve SETNAME and update only the AUTH password")
+	}
 }

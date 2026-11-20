@@ -25,6 +25,7 @@ package redisproxy
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -39,21 +40,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"keykoi/internal/ipcclient"
 	"keykoi/internal/model"
+	"keykoi/internal/osruntime"
+	"keykoi/internal/proxylease"
 	"keykoi/internal/secret"
 )
 
-// Broker 是代理访问后台运行面的最小接口。*ipcclient.Client 直接满足它。
-//
-// 目标与凭证来自同一次授权：Resolve 的返回同时带 Binding 快照与凭证字段，
-// 代理不再列出 /v1/bindings；既有连接只用 Get 读单条元数据核对改绑。
-type Broker interface {
-	// Resolve 用会话令牌换取向上游认证所需的凭证字段与同一次授权的 Binding。
-	Resolve(token, bindingID, mode string) (*ipcclient.Resolved, error)
-	// Get 读取单条绑定元数据，供既有连接核对改绑；它不返回凭证，也不建立许可。
-	Get(path string, out any) error
-}
+// Broker is the local authority used by the daemon-owned adapter.
+type Broker = proxylease.Authority
 
 // Config 配置代理。
 type Config struct {
@@ -96,9 +90,9 @@ func (c *Config) normalize() error {
 	if c.DialTimeout <= 0 {
 		c.DialTimeout = 10 * time.Second
 	}
-	if c.RevalidateInterval <= 0 || c.RevalidateInterval > bindingCheckInterval {
+	if c.RevalidateInterval <= 0 || c.RevalidateInterval > proxylease.Interval {
 		// 超过 1 秒的配置会削弱“改绑后最多 1 秒内被发现”的保证，统一收紧到上限。
-		c.RevalidateInterval = bindingCheckInterval
+		c.RevalidateInterval = proxylease.Interval
 	}
 	if c.MaxConnections <= 0 {
 		c.MaxConnections = 64
@@ -158,17 +152,7 @@ func (s *Server) Config() Config { return s.cfg }
 
 // Listen 绑定客户端监听地址。端口 0 时由系统分配，Addrs 给出实际地址。
 func (s *Server) Listen() error {
-	host, _, err := net.SplitHostPort(s.cfg.ListenAddr)
-	if err != nil {
-		return fmt.Errorf("redisproxy: invalid listen address %q: %w", s.cfg.ListenAddr, err)
-	}
-	if host != "" && host != "localhost" {
-		ip := net.ParseIP(host)
-		if ip == nil || !ip.IsLoopback() {
-			return fmt.Errorf("redisproxy: listen address %q must be a loopback address", s.cfg.ListenAddr)
-		}
-	}
-	ln, err := net.Listen("tcp", s.cfg.ListenAddr)
+	ln, err := osruntime.ListenLoopbackTCP(s.cfg.ListenAddr)
 	if err != nil {
 		return fmt.Errorf("redisproxy: listen: %w", err)
 	}
@@ -247,7 +231,7 @@ func (s *Server) Serve(ctx context.Context) error {
 				s.wg.Add(1)
 				go func() {
 					defer s.wg.Done()
-					s.handle(c)
+					s.handle(ctx, c)
 				}()
 			}
 		}(ln)
@@ -337,7 +321,7 @@ func (s *Server) Stats() (active, total, denied int64) {
 }
 
 // handle 处理一条客户端连接。
-func (s *Server) handle(conn net.Conn) {
+func (s *Server) handle(ctx context.Context, conn net.Conn) {
 	s.total.Add(1)
 	remote := conn.RemoteAddr().String()
 	if s.active.Add(1) > int64(s.cfg.MaxConnections) {
@@ -366,7 +350,7 @@ func (s *Server) handle(conn net.Conn) {
 		return
 	}
 
-	target, err := s.resolveTarget(token)
+	target, err := s.resolveTarget(ctx, token)
 	if err != nil {
 		s.denied.Add(1)
 		_, _ = conn.Write(errorString("NOAUTH " + err.Error()))
@@ -374,6 +358,8 @@ func (s *Server) handle(conn net.Conn) {
 		return
 	}
 
+	defer target.use.Finish()
+	defer target.use.Track(conn)()
 	up, err := s.dialUpstream(target)
 	if err != nil {
 		s.denied.Add(1)
@@ -382,6 +368,7 @@ func (s *Server) handle(conn net.Conn) {
 		return
 	}
 	defer up.close()
+	defer target.use.Track(up.conn)()
 
 	if err := up.authenticate(); err != nil {
 		s.denied.Add(1)
@@ -504,62 +491,47 @@ const unauthorizedReply = "-NOAUTH Authentication required.\r\n"
 //
 // origin 的 scheme 决定上游传输：https 走 TLS（校验证书链与主机名），
 // http 是明文，必须由 InsecureUpstream 显式允许。
-func (s *Server) resolveTarget(token string) (UpstreamTarget, error) {
-	resolved, err := s.broker.Resolve(token, s.cfg.BindingID, string(model.ModeRuntimeDelivery))
-	if resolved != nil {
-		defer s.releaseLease(resolved)
-	}
+func (s *Server) resolveTarget(ctx context.Context, token string) (UpstreamTarget, error) {
+	sessionToken := secret.New(token)
+	resolved, err := proxylease.Authorize(ctx, s.broker, sessionToken, s.cfg.BindingID, s.cfg.AuthTimeout)
 	if err != nil {
-		return UpstreamTarget{}, denialForResolveError(err)
+		return UpstreamTarget{}, proxylease.Denial(err)
 	}
-	binding, err := authorizedBinding(resolved, s.cfg.BindingID)
+	use, err := proxylease.Begin(s.broker, sessionToken, resolved, s.cfg.RevalidateInterval)
 	if err != nil {
 		return UpstreamTarget{}, err
 	}
-	origin, err := binding.Origin()
+	accepted := false
+	defer func() {
+		if !accepted {
+			use.Finish()
+		}
+	}()
+	binding, err := proxylease.Binding(resolved, s.cfg.BindingID)
 	if err != nil {
-		return UpstreamTarget{}, errors.New("binding has an invalid upstream origin")
+		return UpstreamTarget{}, err
 	}
-	host := origin.Hostname()
-	port := origin.Port()
-	if port == "" {
-		port = "6379"
+	target, err := binding.DatabaseTarget(model.ProtocolRedis, "6379")
+	if err != nil {
+		return UpstreamTarget{}, err
 	}
-	if host == "" {
-		return UpstreamTarget{}, errors.New("binding has no upstream host")
-	}
-	userField := firstNonEmpty(s.cfg.UsernameField, binding.UsernameField, "username")
-	passField := firstNonEmpty(s.cfg.PasswordField, binding.PasswordField, "password")
-	user := resolved.Fields[userField]
-	password := resolved.Fields[passField]
-	if password == "" {
+
+	userField := cmp.Or(s.cfg.UsernameField, binding.UsernameField, "username")
+	passField := cmp.Or(s.cfg.PasswordField, binding.PasswordField, "password")
+	user := resolved.Version.Fields[userField].RevealString()
+	password := resolved.Version.Fields[passField]
+	if password.IsEmpty() {
 		return UpstreamTarget{}, fmt.Errorf("credential is missing field %q for the redis adapter", passField)
 	}
+	accepted = true
 	return UpstreamTarget{
-		Host:           host,
-		User:           user,
-		Password:       secret.New(password),
-		Addr:           net.JoinHostPort(host, port),
-		TLS:            strings.EqualFold(origin.Scheme, "https"),
-		Revision:       binding.Revision,
-		UpstreamOrigin: binding.UpstreamOrigin,
+		Host:     target.Host,
+		User:     user,
+		Password: password,
+		Addr:     target.Address(),
+		TLS:      target.TLS,
+		use:      use,
 	}, nil
-}
-
-// authorizedBinding 取出这次授权校验过的 Binding 快照；缺失或指向别的绑定都拒绝，
-// 绝不回落到另一次读取。
-func authorizedBinding(resolved *ipcclient.Resolved, bindingID string) (*model.Binding, error) {
-	if resolved == nil || resolved.Binding == nil {
-		return nil, errors.New("authorization returned no binding snapshot")
-	}
-	binding := resolved.Binding
-	if binding.ID != "" && binding.ID != bindingID {
-		return nil, errors.New("authorization returned a binding snapshot for another binding")
-	}
-	if binding.Status != "" && binding.Status != model.StatusActive {
-		return nil, errors.New("binding is " + string(binding.Status))
-	}
-	return binding, nil
 }
 
 // dialUpstream 建立到上游 Redis 的连接。
@@ -569,7 +541,7 @@ func authorizedBinding(resolved *ipcclient.Resolved, bindingID string) (*model.B
 // 在 InsecureUpstream 显式声明时才被接受。
 func (s *Server) dialUpstream(target UpstreamTarget) (*upstream, error) {
 	d := &net.Dialer{Timeout: s.cfg.DialTimeout, KeepAlive: 30 * time.Second}
-	conn, err := d.Dial("tcp", target.Addr)
+	conn, err := d.DialContext(target.use.Context(), "tcp", target.Addr)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", target.Addr, err)
 	}
@@ -583,7 +555,7 @@ func (s *Server) dialUpstream(target UpstreamTarget) (*upstream, error) {
 		}
 		tlsConn := tls.Client(conn, cfg)
 		_ = tlsConn.SetDeadline(time.Now().Add(s.cfg.DialTimeout))
-		if err := tlsConn.Handshake(); err != nil {
+		if err := tlsConn.HandshakeContext(target.use.Context()); err != nil {
 			_ = conn.Close()
 			return nil, fmt.Errorf("upstream TLS handshake with %s: %w", target.Addr, err)
 		}
@@ -591,7 +563,7 @@ func (s *Server) dialUpstream(target UpstreamTarget) (*upstream, error) {
 		encrypted = true
 	case !s.cfg.InsecureUpstream:
 		_ = conn.Close()
-		return nil, fmt.Errorf("upstream %s is plaintext: register the binding origin as https:// for TLS, or declare insecure_upstream to allow a cleartext AUTH", target.Addr)
+		return nil, fmt.Errorf("upstream %s is plaintext: register the target as rediss:// or https:// for TLS, or declare insecure_upstream to allow a cleartext AUTH", target.Addr)
 	}
 	_ = conn.SetDeadline(time.Now().Add(s.cfg.AuthTimeout))
 	return &upstream{
@@ -624,24 +596,10 @@ func (s *Server) upstreamTLSConfig(host string) (*tls.Config, error) {
 	}, nil
 }
 
-// releaseLease 立即释放一次 Resolve 创建的许可；凭证与目标仍只使用同次返回的快照。
-func (s *Server) releaseLease(resolved *ipcclient.Resolved) {
-	if resolved == nil || resolved.Lease.ID == "" {
-		return
-	}
-	revoker, ok := s.broker.(interface{ RevokeLease(string) error })
-	if !ok {
-		return
-	}
-	if err := revoker.RevokeLease(resolved.Lease.ID); err != nil {
-		s.logger.Printf("redis-proxy revoke lease: %v", err)
-	}
-}
-
 // relay 认证完成后双向转发。客户端方向按 RESP 消息重写 AUTH 口令，避免令牌流到上游；
 // 同时在同一循环里做有界的改绑核对（最多每秒一次，不另起后台 goroutine）。
 func (s *Server) relay(conn net.Conn, clientReader *bufio.Reader, up *upstream) {
-	watch := s.newBindingWatch(up.target)
+	watch := up.target.use
 
 	done := make(chan struct{}, 2)
 	go func() {
@@ -668,14 +626,14 @@ func (s *Server) relay(conn net.Conn, clientReader *bufio.Reader, up *upstream) 
 // 空闲时用读截止时间按 RevalidateInterval 唤醒核对；Peek 不消费字节，
 // 超时不会破坏 RESP 解析状态。一旦确认有数据，命令按完整消息读完再继续，
 // 不会因为核对间隔把一条 RESP 消息截断。
-func (s *Server) copyClientToUpstream(conn net.Conn, clientReader *bufio.Reader, up *upstream, watch *bindingWatch) {
+func (s *Server) copyClientToUpstream(conn net.Conn, clientReader *bufio.Reader, up *upstream, watch *proxylease.Use) {
 	for {
-		if watch.due(time.Now()) && watch.changed() {
+		if watch.Changed() {
 			// 协议层先回错误再断开：沿用现有 -ERR 路径，客户端能看到明确原因。
 			_, _ = conn.Write(errorString("ERR binding authorization changed; reconnect"))
 			return
 		}
-		if err := conn.SetReadDeadline(time.Now().Add(watch.interval)); err != nil {
+		if err := conn.SetReadDeadline(time.Now().Add(watch.Interval)); err != nil {
 			return
 		}
 		if _, err := clientReader.Peek(1); err != nil {
@@ -783,15 +741,12 @@ type UpstreamTarget struct {
 	Addr     string
 	// TLS 表示登记 origin 声明了 https，上游必须先完成受验证的 TLS 握手。
 	TLS bool
-	// Revision 是同一次授权返回的 Binding revision，供在途连接检测改绑。
-	Revision int64
-	// UpstreamOrigin 是同一次授权返回的绑定 origin，用于发现改绑到别的目标。
-	UpstreamOrigin string
+	use *proxylease.Use
 }
 
 // String 只输出非秘密字段。
 func (t UpstreamTarget) String() string {
-	return fmt.Sprintf("addr=%s user=%s", t.Addr, firstNonEmpty(t.User, "default"))
+	return fmt.Sprintf("addr=%s user=%s", t.Addr, cmp.Or(t.User, "default"))
 }
 
 // rewriteAuth 把客户端再次发送的 AUTH / HELLO ... AUTH 口令替换为真实密码。
@@ -805,48 +760,38 @@ func rewriteAuth(raw []byte, args []string, target UpstreamTarget) []byte {
 		if len(args) == 2 {
 			return encodeCommand([]string{"AUTH", password})
 		}
-		if len(args) >= 3 {
+		if len(args) == 3 {
 			return encodeCommand([]string{"AUTH", args[1], password})
 		}
 	case "HELLO":
-		out := append([]string(nil), args...)
-		for i := 2; i+2 < len(out); i++ {
-			if strings.EqualFold(out[i], "AUTH") {
-				out[i+2] = password
-				return encodeCommand(out)
+		if len(args) < 2 || (args[1] != "2" && args[1] != "3") {
+			return raw
+		}
+		passwordIndex := 0
+		for i := 2; i < len(args); {
+			switch strings.ToUpper(args[i]) {
+			case "AUTH":
+				if i+2 >= len(args) || passwordIndex != 0 {
+					return raw
+				}
+				passwordIndex = i + 2
+				i += 3
+			case "SETNAME":
+				if i+1 >= len(args) {
+					return raw
+				}
+				i += 2
+			default:
+				return raw
 			}
+		}
+		if passwordIndex != 0 {
+			out := append([]string(nil), args...)
+			out[passwordIndex] = password
+			return encodeCommand(out)
 		}
 	}
 	return raw
-}
-
-// denialForResolveError 把后台稳定错误码映射为客户端可见的认证失败。
-// 授权不足或令牌无效统一表现为 NOAUTH，避免泄漏授权细节。
-func denialForResolveError(err error) error {
-	var apiErr *ipcclient.APIError
-	if errors.As(err, &apiErr) {
-		switch model.Code(apiErr.Code) {
-		case model.CodeSessionInvalid, model.CodeUseNotAllowed, model.CodeLeaseExpired:
-			return errors.New("session token is not authorized to use this binding")
-		case model.CodeBindingDisabled:
-			return errors.New("binding is not available")
-		case model.CodeVaultLocked:
-			return errors.New("keykoi vault is locked")
-		case model.CodeCredentialUnavailable:
-			return errors.New("credential is unavailable")
-		}
-	}
-	// 任何后台错误都不向客户端回显原文，避免带出内部细节。
-	return errors.New("keykoid resolve failed")
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 func isClosedErr(err error) bool {

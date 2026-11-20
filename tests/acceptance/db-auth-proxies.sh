@@ -5,7 +5,7 @@
 # 向上游完成认证，再转发命令。Redis 用本机 redis-server（独立端口 + requirepass）；
 # MySQL / MongoDB 用 Docker 真实服务（临时端口、运行时随机口令、结束时删除）。
 #
-# 负例：错误令牌、无 runtime_delivery 许可、上游真实密码错误、客户端断开后上游会话释放。
+# 负例：错误令牌、无 proxy 许可、上游真实密码错误、客户端断开后上游会话释放。
 # 口令与令牌都在运行时生成，不写入日志或报告；测试容器与临时库在结束时清理。
 #   KEEP_ENV=1       保留测试容器与 redis-server（便于人工复核）
 #   SKIP_DOCKER=1    只跑 Redis 部分
@@ -143,9 +143,9 @@ add_binding() { # id credential origin route
     --route "$4" --scheme basic --username-field username --password-field password >/dev/null
 }
 
-grant_runtime() { # binding
+grant_proxy() { # binding
   "$BIN/keykoi" --json grant add --principal "$PRINCIPAL" --binding "$1" \
-    --mode runtime_delivery --auth permanent --max-lease-seconds 600 >/dev/null
+    --mode proxy --auth permanent --max-lease-seconds 600 >/dev/null
 }
 
 start_proxy() { # protocol binding prefix [proxy flags...] -> 设置 PROXY_PORT / PROXY_TOKEN
@@ -188,10 +188,12 @@ if [ -n "$REDIS_SERVER" ] && [ -n "$REDIS_CLI" ]; then
     R_BIND_BADPW="bind_p4_redis_badpw"
     add_binding "$R_BIND" "$R_CRED" "http://127.0.0.1:$R_PORT" p4-redis
     add_binding "$R_BIND_NOGRANT" "$R_CRED" "http://127.0.0.1:$R_PORT" p4-redis-nogrant
-    grant_runtime "$R_BIND"
+    R_GRANT="$("$BIN/keykoi" --json grant add --principal "$PRINCIPAL" --binding "$R_BIND" \
+      --mode proxy --auth permanent --max-lease-seconds 600 |
+      python3 -c 'import json, sys; print(json.load(sys.stdin)["id"])')"
     BAD_CRED="$(add_credential "p4 redis bad" redis default "wrong-upstream-password" "")"
     add_binding "$R_BIND_BADPW" "$BAD_CRED" "http://127.0.0.1:$R_PORT" p4-redis-badpw
-    grant_runtime "$R_BIND_BADPW"
+    grant_proxy "$R_BIND_BADPW"
 
     start_proxy redis "$R_BIND" "$WORK/proxy-redis" --upstream-insecure
     R_PROXY_PORT="$PROXY_PORT"
@@ -227,9 +229,9 @@ if [ -n "$REDIS_SERVER" ] && [ -n "$REDIS_CLI" ]; then
     R_NG_EXIT=$?
     set -e
     if [ "$R_NG_EXIT" -ne 0 ] && grep -q "not authorized" "$WORK/redis-nogrant.out"; then
-      check "redis binding without runtime_delivery rejected" "denied" "denied"
+      check "redis binding without proxy rejected" "denied" "denied"
     else
-      check "redis binding without runtime_delivery rejected" "denied" "exit=$R_NG_EXIT $(tail -1 "$WORK/redis-nogrant.out")"
+      check "redis binding without proxy rejected" "denied" "exit=$R_NG_EXIT $(tail -1 "$WORK/redis-nogrant.out")"
     fi
 
     start_proxy redis "$R_BIND_BADPW" "$WORK/proxy-redis-badpw" --upstream-insecure
@@ -254,6 +256,24 @@ if [ -n "$REDIS_SERVER" ] && [ -n "$REDIS_CLI" ]; then
       sleep 0.1
     done
     check "redis upstream sessions released after client close" "0" "$R_CLIENTS"
+
+    if R_TEST_TOKEN="$R_TOKEN" python3 - "$R_PROXY_PORT" "$BIN/keykoi" "$R_GRANT" <<'PYTEST'
+import os, socket, subprocess, sys
+with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=3) as conn:
+    reader = conn.makefile("rb")
+    token = os.environ.pop("R_TEST_TOKEN").encode()
+    conn.sendall(b"*2\r\n$4\r\nAUTH\r\n$" + str(len(token)).encode() + b"\r\n" + token + b"\r\n")
+    if reader.readline() != b"+OK\r\n":
+        raise SystemExit("could not open the leased connection")
+    subprocess.run([sys.argv[2], "grant", "revoke", "--id", sys.argv[3]], check=True, stdout=subprocess.DEVNULL)
+    if reader.read(1) != b"":
+        raise SystemExit("connection remained open after revocation")
+PYTEST
+    then
+      check "redis existing connection ends after grant revocation" "closed" "closed"
+    else
+      check "redis existing connection ends after grant revocation" "closed" "failed"
+    fi
 
     # 会话令牌只允许出现在代理启动时打印到 stdout 的那一行（供客户端取用），
     # 真实密码与令牌都不得出现在 keykoid 日志或代理 stderr 里。
@@ -318,8 +338,8 @@ else
     add_binding "$M_BIND" "$M_CRED" "http://127.0.0.1:$C_PORT" p4-mysql
     add_binding "$M_BIND_NOGRANT" "$M_CRED" "http://127.0.0.1:$C_PORT" p4-mysql-nogrant
     add_binding "$M_BIND_BADPW" "$BAD_M_CRED" "http://127.0.0.1:$C_PORT" p4-mysql-badpw
-    grant_runtime "$M_BIND"
-    grant_runtime "$M_BIND_BADPW"
+    grant_proxy "$M_BIND"
+    grant_proxy "$M_BIND_BADPW"
 
     start_proxy mysql "$M_BIND" "$WORK/proxy-mysql" "${MYSQL_TLS_ARGS[@]}"
     M_PROXY_PORT="$PROXY_PORT"
@@ -338,7 +358,7 @@ else
     # 上游连接是明文，因此不能用上游的 Ssl_cipher 变量判断客户端这一跳。
     M_TLS_ONE="$(mysql_run -p"$M_TOKEN" --ssl-mode=REQUIRED -N -e 'select 5' | tr -d '\r' || true)"
     check "mysql client-side TLS enforced by --ssl-mode=REQUIRED" "5" "$M_TLS_ONE"
-    TLS_LOGGED="$(grep -c 'tls=true' "$WORK/proxy-mysql.err" 2>/dev/null || true)"
+    TLS_LOGGED="$(grep -c 'tls=true' "$WORK/keykoid.log" 2>/dev/null || true)"
     if [ "${TLS_LOGGED:-0}" -ge 1 ]; then
       check "mysql proxy log records a client-side TLS session" "yes" "yes"
     else
@@ -363,9 +383,9 @@ else
     M_NG_EXIT=$?
     set -e
     if [ "$M_NG_EXIT" -ne 0 ] && grep -q "Access denied" "$WORK/mysql-nogrant.out"; then
-      check "mysql binding without runtime_delivery rejected" "denied" "denied"
+      check "mysql binding without proxy rejected" "denied" "denied"
     else
-      check "mysql binding without runtime_delivery rejected" "denied" "exit=$M_NG_EXIT $(tail -1 "$WORK/mysql-nogrant.out")"
+      check "mysql binding without proxy rejected" "denied" "exit=$M_NG_EXIT $(tail -1 "$WORK/mysql-nogrant.out")"
     fi
 
     start_proxy mysql "$M_BIND_BADPW" "$WORK/proxy-mysql-badpw" "${MYSQL_TLS_ARGS[@]}"
@@ -418,7 +438,7 @@ else
         >/dev/null 2>&1; then
         N_CRED="$(add_credential "p4 mysql native" mysql kknative "$N_UP_PW" keykoi_proxy_test)"
         add_binding bind_p4_mysql_native "$N_CRED" "http://127.0.0.1:$N_PORT" p4-mysql-native
-        grant_runtime bind_p4_mysql_native
+        grant_proxy bind_p4_mysql_native
         NATIVE_TLS_ARGS=()
         if docker cp "$N_NAME:/var/lib/mysql/ca.pem" "$WORK/mysql-native-ca.pem" >/dev/null 2>&1; then
           NATIVE_TLS_ARGS=(--upstream-ca "$WORK/mysql-native-ca.pem" --mysql-upstream-tls-mode verify-ca)
@@ -455,8 +475,25 @@ else
   MG_PORT="$(free_port)"
   MG_ROOT_PW="$(openssl rand -hex 16)"
   MG_UP_PW="$(openssl rand -hex 16)"
+  MG_TLS="$WORK/mongo-tls"
+  mkdir -p "$MG_TLS"
+  openssl req -new -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=keykoi-mongo-test' \
+    -keyout "$MG_TLS/server.key" -out "$MG_TLS/ca.pem" -config /dev/stdin -extensions mongo_tls \
+    >"$WORK/mongo-cert.log" 2>&1 <<'EOF'
+[req]
+distinguished_name = dn
+[dn]
+[mongo_tls]
+basicConstraints = critical,CA:TRUE
+subjectAltName = IP:127.0.0.1
+EOF
+  cat "$MG_TLS/server.key" "$MG_TLS/ca.pem" > "$MG_TLS/server.pem"
+  chmod 644 "$MG_TLS/server.pem"
   docker run -d --name "$MG_NAME" -e MONGO_INITDB_ROOT_USERNAME=root \
-    -e MONGO_INITDB_ROOT_PASSWORD="$MG_ROOT_PW" -p "127.0.0.1:$MG_PORT:27017" "$MONGO_IMAGE" >/dev/null
+    -e MONGO_INITDB_ROOT_PASSWORD="$MG_ROOT_PW" -p "127.0.0.1:$MG_PORT:27017" \
+    --mount "type=bind,source=$MG_TLS,target=/mongo-tls,readonly" "$MONGO_IMAGE" \
+    --tlsMode allowTLS --tlsCertificateKeyFile /mongo-tls/server.pem --tlsCAFile /mongo-tls/ca.pem \
+    --tlsAllowConnectionsWithoutCertificates >/dev/null
   CONTAINERS+=("$MG_NAME")
   MG_READY=0
   for _ in $(seq 1 120); do
@@ -478,13 +515,13 @@ else
     MG_BIND_NOGRANT="bind_p4_mongo_nogrant"
     MG_BIND_BADPW="bind_p4_mongo_badpw"
     BAD_MG_CRED="$(add_credential "p4 mongo bad" mongo kkuser "wrong-upstream-password" admin)"
-    add_binding "$MG_BIND" "$MG_CRED" "http://127.0.0.1:$MG_PORT" p4-mongo
-    add_binding "$MG_BIND_NOGRANT" "$MG_CRED" "http://127.0.0.1:$MG_PORT" p4-mongo-nogrant
-    add_binding "$MG_BIND_BADPW" "$BAD_MG_CRED" "http://127.0.0.1:$MG_PORT" p4-mongo-badpw
-    grant_runtime "$MG_BIND"
-    grant_runtime "$MG_BIND_BADPW"
+    add_binding "$MG_BIND" "$MG_CRED" "mongodb://127.0.0.1:$MG_PORT" p4-mongo
+    add_binding "$MG_BIND_NOGRANT" "$MG_CRED" "mongodb://127.0.0.1:$MG_PORT" p4-mongo-nogrant
+    add_binding "$MG_BIND_BADPW" "$BAD_MG_CRED" "mongodb://127.0.0.1:$MG_PORT" p4-mongo-badpw
+    grant_proxy "$MG_BIND"
+    grant_proxy "$MG_BIND_BADPW"
 
-    start_proxy mongo "$MG_BIND" "$WORK/proxy-mongo"
+    start_proxy mongo "$MG_BIND" "$WORK/proxy-mongo" --upstream-ca "$MG_TLS/ca.pem"
     MG_PROXY_PORT="$PROXY_PORT"
     MG_TOKEN="$PROXY_TOKEN"
     mg_uri() { # token mechanism auth-source
@@ -493,7 +530,7 @@ else
     }
     MG_PING="$(mongosh "$(mg_uri "$MG_TOKEN" PLAIN '%24external')" --quiet --eval \
       'print(db.runCommand({ping:1}).ok)' 2>&1 | tail -1 | tr -d '\r' || true)"
-    check "mongo ping through proxy (SASL PLAIN)" "1" "$MG_PING"
+    check "mongo ping through proxy with a trusted TLS certificate" "1" "$MG_PING"
     MG_VER="$(mongosh "$(mg_uri "$MG_TOKEN" PLAIN '%24external')" --quiet --eval \
       'print(db.version())' 2>&1 | tail -1 | tr -d '\r' || true)"
     check "mongo proxied command reaches the real server" "$MG_VERSION" "$MG_VER"
@@ -539,19 +576,19 @@ else
       check "mongo client-side SCRAM rejected with an explicit reason" "denied" "exit=$MG_SCRAM_EXIT $(tail -1 "$WORK/mongo-scram.out")"
     fi
 
-    start_proxy mongo "$MG_BIND_NOGRANT" "$WORK/proxy-mongo-nogrant"
+    start_proxy mongo "$MG_BIND_NOGRANT" "$WORK/proxy-mongo-nogrant" --upstream-ca "$MG_TLS/ca.pem"
     set +e
     mongosh "mongodb://kkuser:$PROXY_TOKEN@127.0.0.1:$PROXY_PORT/?authSource=%24external&authMechanism=PLAIN&directConnection=true" \
       --quiet --eval 'db.runCommand({ping:1})' >"$WORK/mongo-nogrant.out" 2>&1
     MG_NG_EXIT=$?
     set -e
     if [ "$MG_NG_EXIT" -ne 0 ] && grep -q "Authentication failed" "$WORK/mongo-nogrant.out"; then
-      check "mongo binding without runtime_delivery rejected" "denied" "denied"
+      check "mongo binding without proxy rejected" "denied" "denied"
     else
-      check "mongo binding without runtime_delivery rejected" "denied" "exit=$MG_NG_EXIT $(tail -1 "$WORK/mongo-nogrant.out")"
+      check "mongo binding without proxy rejected" "denied" "exit=$MG_NG_EXIT $(tail -1 "$WORK/mongo-nogrant.out")"
     fi
 
-    start_proxy mongo "$MG_BIND_BADPW" "$WORK/proxy-mongo-badpw"
+    start_proxy mongo "$MG_BIND_BADPW" "$WORK/proxy-mongo-badpw" --upstream-ca "$MG_TLS/ca.pem"
     set +e
     mongosh "mongodb://kkuser:$PROXY_TOKEN@127.0.0.1:$PROXY_PORT/?authSource=%24external&authMechanism=PLAIN&directConnection=true" \
       --quiet --eval 'db.runCommand({ping:1})' >"$WORK/mongo-badpw.out" 2>&1
@@ -562,6 +599,20 @@ else
     else
       check "mongo wrong upstream password rejected" "denied" "exit=$MG_BADPW_EXIT $(tail -1 "$WORK/mongo-badpw.out")"
     fi
+
+    start_proxy mongo "$MG_BIND" "$WORK/proxy-mongo-untrusted"
+    if mongosh "mongodb://kkuser:$PROXY_TOKEN@127.0.0.1:$PROXY_PORT/?authSource=%24external&authMechanism=PLAIN&directConnection=true" \
+      --quiet --eval 'db.runCommand({ping:1})' >"$WORK/mongo-untrusted.out" 2>&1; then
+      check "mongo rejects untrusted TLS without plaintext fallback" "denied" "connected"
+    else
+      check "mongo rejects untrusted TLS without plaintext fallback" "Authentication failed" \
+        "$(grep -o 'Authentication failed' "$WORK/mongo-untrusted.out" | head -1 || true)"
+    fi
+
+    start_proxy mongo "$MG_BIND" "$WORK/proxy-mongo-plaintext" --upstream-insecure
+    MG_PLAINTEXT_PING="$(mongosh "mongodb://kkuser:$PROXY_TOKEN@127.0.0.1:$PROXY_PORT/?authSource=%24external&authMechanism=PLAIN&directConnection=true" \
+      --quiet --eval 'print(db.runCommand({ping:1}).ok)' 2>&1 | tail -1 | tr -d '\r' || true)"
+    check "mongo allows explicitly selected plaintext upstream" "1" "$MG_PLAINTEXT_PING"
 
     LEAKS=0
     for f in "$WORK/proxy-mongo.out" "$WORK/proxy-mongo.err" "$WORK/keykoid.log"; do

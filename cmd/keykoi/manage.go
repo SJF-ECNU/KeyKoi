@@ -252,13 +252,15 @@ func cmdBinding(sub string, args []string) error {
 		fs := flag.NewFlagSet("binding add", flag.ContinueOnError)
 		id := fs.String("id", "", "binding id")
 		cred := fs.String("credential", "", "credential id")
-		origin := fs.String("origin", "", "upstream origin, e.g. https://api.example.com")
+		origin := fs.String("origin", "", "upstream address, e.g. https://api.example.com or rediss://cache.example.com")
 		route := fs.String("route", "", "gateway route name")
 		scheme := fs.String("scheme", "bearer", "bearer|api_key|basic")
 		header := fs.String("header", "", "auth header override")
 		tokenField := fs.String("token-field", "", "credential field for token")
 		userField := fs.String("username-field", "", "credential field for basic username")
 		passField := fs.String("password-field", "", "credential field for basic password")
+		var runtimeFields multiFlag
+		fs.Var(&runtimeFields, "runtime-field", "permit this credential field in raw delivery (repeatable)")
 		paths := fs.String("paths", "", "comma separated allowed path prefixes")
 		if err := fs.Parse(args); err != nil {
 			return err
@@ -270,6 +272,9 @@ func cmdBinding(sub string, args []string) error {
 		}
 		if *paths != "" {
 			body["allowed_paths"] = strings.Split(*paths, ",")
+		}
+		if runtimeFields != nil {
+			body["runtime_fields"] = runtimeFields
 		}
 		var out map[string]any
 		if err := client().Post("/v1/bindings", body, &out); err != nil {

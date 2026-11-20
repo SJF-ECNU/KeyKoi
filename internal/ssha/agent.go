@@ -15,7 +15,7 @@ import (
 //
 // 语义：
 //   - 枚举只返回当前会话持有 sign 许可、且属于本 agent 登记的 Binding 的托管密钥；
-//   - 每次签名都重新向中介申请材料，许可被撤销后立即拒绝；
+//   - 每次签名都重新向中介申请签名，许可被撤销后立即拒绝；
 //   - 不支持 Add/Lock 等本地写入动作，钥匙管理走 keykoi 管理面。
 type Agent struct {
 	provider Provider
@@ -56,20 +56,20 @@ func (a *Agent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature, error) {
 	return a.SignWithFlags(key, data, 0)
 }
 
-// SignWithFlags 先校验密钥归属，再向中介申请一次材料并签名。
+// SignWithFlags 先校验密钥归属，再向中介申请签名。
 func (a *Agent) SignWithFlags(key ssh.PublicKey, data []byte, flags agent.SignatureFlags) (*ssh.Signature, error) {
 	info, err := a.lookup(key)
 	if err != nil {
 		return nil, err
 	}
-	mat, err := a.provider.ResolveMaterial(context.Background(), info.BindingID)
+	signature, err := a.provider.Sign(context.Background(), info.BindingID, data, flags)
 	if err != nil {
-		if mat != nil {
-			mat.Wipe()
-		}
 		return nil, err
 	}
-	return Sign(mat, data, flags, nil)
+	if err := key.Verify(data, signature); err != nil {
+		return nil, model.NewError(model.CodeCredentialUnavailable, "signing key no longer matches the selected public key")
+	}
+	return signature, nil
 }
 
 // Signers 返回惰性签名器：签名时仍然走一次中介授权，不缓存私钥。

@@ -2,13 +2,18 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"keykoi/internal/broker"
 	"keykoi/internal/model"
+	"keykoi/internal/secret"
+	"keykoi/internal/store"
 )
 
 // 通用解析接口只服务 runtime_delivery：签名许可不能取得整组原始凭证。
@@ -51,8 +56,47 @@ func TestResolveReturnsBindingSnapshot(t *testing.T) {
 	}
 }
 
-// SSH 签名材料接口只服务 ssh_key 凭证，其他类型不返回任何字段。
-func TestSSHSignMaterialRejectsNonSSHKey(t *testing.T) {
+func TestResolveHonorsBindingRuntimeFields(t *testing.T) {
+	f := newDaemonFixture(t)
+	ctx := context.Background()
+	f.b.material = model.CredentialVersion{Fields: map[string]secret.Value{
+		"public_field":  secret.New("approved value"),
+		"private_field": secret.New("restricted value"),
+	}}
+	binding, err := f.st.GetBinding(ctx, "bind_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding.RuntimeFields = []string{"public_field"}
+	if err := f.st.PutBinding(ctx, binding); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.PutGrant(ctx, &model.Grant{
+		ID: "runtime_selected", PrincipalID: "principal_admin_local", BindingID: binding.ID,
+		DeliveryMode: model.ModeRuntimeDelivery, AuthRequirement: "permanent", Status: model.StatusActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, token, err := f.d.broker.CreateSession(ctx, "principal_admin_local", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"token":"` + token.RevealString() + `","binding_id":"bind_test"}`
+	w := httptest.NewRecorder()
+	f.d.handleResolve(w, httptest.NewRequest(http.MethodPost, "/v1/resolve", strings.NewReader(body)))
+	var result struct {
+		Fields map[string]string `json:"fields"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != http.StatusOK || len(result.Fields) != 1 || result.Fields["public_field"] != "approved value" {
+		t.Fatalf("runtime delivery must contain only the approved field, status=%d", w.Code)
+	}
+}
+
+// SSH 签名接口只服务 ssh_key 凭证，其他类型不返回任何字段。
+func TestSSHSignRejectsNonSSHKey(t *testing.T) {
 	f := newDaemonFixture(t)
 	ctx := context.Background()
 	if err := f.st.PutGrant(ctx, &model.Grant{
@@ -68,7 +112,7 @@ func TestSSHSignMaterialRejectsNonSSHKey(t *testing.T) {
 	}
 	body := `{"token":"` + token.RevealString() + `","binding_id":"bind_test"}`
 	rec := httptest.NewRecorder()
-	f.d.handleSSHSignMaterial(rec, httptest.NewRequest(http.MethodPost, "/v1/ssh-sign-material", strings.NewReader(body)))
+	f.d.handleSSHSign(rec, httptest.NewRequest(http.MethodPost, "/v1/ssh-sign", strings.NewReader(body)))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("non ssh_key binding must be refused, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -139,6 +183,88 @@ func TestUseLeaseMetadataReleasesLease(t *testing.T) {
 	}
 	if n := f.d.broker.ActiveLeaseCount(); n != 0 {
 		t.Fatalf("metadata lookup must not leave a live lease, got %d", n)
+	}
+}
+
+func TestIPCExecutionControl(t *testing.T) {
+	f := newDaemonFixture(t)
+	ctx := context.Background()
+	if err := f.d.bootstrapPrincipals(ctx); err != nil {
+		t.Fatal(err)
+	}
+	router := f.d.ipcRouter()
+	for _, tc := range []struct {
+		name      string
+		principal string
+		admin     bool
+	}{
+		{"own", localPrincipalID(), false},
+		{"managed", "principal_admin_local", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := f.st.PutGrant(ctx, &model.Grant{
+				ID: "grant_control", PrincipalID: tc.principal, BindingID: "bind_test",
+				DeliveryMode: model.ModeRuntimeDelivery, AuthRequirement: "permanent", Status: model.StatusActive,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			session, token, err := f.d.broker.CreateSession(ctx, tc.principal, "control")
+			if err != nil {
+				t.Fatal(err)
+			}
+			auth, err := f.d.broker.Authorize(ctx, broker.Request{
+				Token: token, BindingID: "bind_test", Mode: model.ModeRuntimeDelivery,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, action := range []struct {
+				path string
+				body string
+			}{
+				{"/v1/use-leases/revoke", fmt.Sprintf(`{"lease_id":%q}`, auth.Lease.ID)},
+				{"/v1/sessions/close", fmt.Sprintf(`{"session_id":%q}`, session.ID)},
+			} {
+				request := httptest.NewRequest(http.MethodPost, action.path, strings.NewReader(action.body))
+				if tc.admin {
+					reply := httptest.NewRecorder()
+					router.ServeHTTP(reply, request)
+					if reply.Code == http.StatusOK {
+						t.Fatalf("%s accepted a mismatched subject", action.path)
+					}
+					request = httptest.NewRequest(http.MethodPost, action.path, strings.NewReader(action.body))
+					request.Header.Set("X-KeyKoi-Admin", f.d.adminToken)
+				}
+				reply := httptest.NewRecorder()
+				router.ServeHTTP(reply, request)
+				if reply.Code != http.StatusOK {
+					t.Fatalf("%s: %d %s", action.path, reply.Code, reply.Body.String())
+				}
+			}
+		})
+	}
+
+	ordinary := httptest.NewRecorder()
+	router.ServeHTTP(ordinary, httptest.NewRequest(http.MethodGet, "/v1/audit-events", nil))
+	if ordinary.Code != http.StatusUnauthorized {
+		t.Fatalf("ordinary requester audit status = %d", ordinary.Code)
+	}
+
+	request := adminRequest(http.MethodGet, "/v1/audit-events", "")
+	reply := httptest.NewRecorder()
+	router.ServeHTTP(reply, request)
+	var audit struct{ Events []store.AuditEvent }
+	if err := json.Unmarshal(reply.Body.Bytes(), &audit); err != nil {
+		t.Fatal(err)
+	}
+	revoked := 0
+	for _, event := range audit.Events {
+		if event.Result == "revoked" {
+			revoked++
+		}
+	}
+	if reply.Code != http.StatusOK || revoked != 4 {
+		t.Fatalf("administrator audit missing revocations: %d %s", reply.Code, reply.Body.String())
 	}
 }
 

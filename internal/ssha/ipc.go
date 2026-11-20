@@ -5,15 +5,14 @@ import (
 	"errors"
 	"sync"
 
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/agent"
+
 	"keykoi/internal/ipcclient"
 	"keykoi/internal/model"
 )
 
-// IPCProvider 通过本机受认证 IPC 向 keykoid 申请密钥元数据与一次性签名材料。
-//
-// 它只携带非管理员会话令牌：枚举走 /v1/ssh-keys，签名材料走 /v1/ssh-sign-material。
-// 两条路径都由后台按 sign 许可重新授权，撤销后立即失效。签名材料接口只返回
-// 私钥与可选口令，因此签名权限不会顺带取得整组原始凭证字段。
+// IPCProvider lists public keys and requests signatures from keykoid.
 type IPCProvider struct {
 	Client *ipcclient.Client
 	Token  string
@@ -46,37 +45,18 @@ func (p *IPCProvider) ListKeys(ctx context.Context) ([]KeyInfo, error) {
 	return out.Keys, nil
 }
 
-// ResolveMaterial 取得一次签名材料。返回错误时材料已被清除。
-func (p *IPCProvider) ResolveMaterial(ctx context.Context, bindingID string) (*Material, error) {
-	var res struct {
-		CredentialID string            `json:"credential_id"`
-		Fields       map[string]string `json:"fields"`
-	}
+// Sign asks keykoid to sign with a key it keeps inside the daemon.
+func (p *IPCProvider) Sign(ctx context.Context, bindingID string, data []byte, flags agent.SignatureFlags) (*ssh.Signature, error) {
+	var out ssh.Signature
 	err := p.withSession(ctx, func(token string) error {
-		return p.Client.Post("/v1/ssh-sign-material", map[string]string{
-			"token": token, "binding_id": bindingID,
-		}, &res)
+		return p.Client.Post("/v1/ssh-sign", map[string]any{
+			"token": token, "binding_id": bindingID, "data": data, "flags": flags,
+		}, &out)
 	})
 	if err != nil {
 		return nil, err
 	}
-	m := &Material{}
-	if v := res.Fields["private_key"]; v != "" {
-		m.PrivateKeyPEM = []byte(v)
-	}
-	if v := res.Fields["private_key_passphrase"]; v != "" {
-		m.Passphrase = []byte(v)
-	}
-	// 交付结果里的字符串副本不可清除，至少立刻断开映射引用。
-	for k := range res.Fields {
-		res.Fields[k] = ""
-	}
-	if len(m.PrivateKeyPEM) == 0 {
-		m.Wipe()
-		return nil, model.NewError(model.CodeCredentialUnavailable,
-			"binding %s did not return a private_key field", bindingID)
-	}
-	return m, nil
+	return &out, nil
 }
 
 // withSession 用当前会话执行一次调用；会话失效时重建一次会话再重试。
@@ -96,11 +76,7 @@ func (p *IPCProvider) withSession(ctx context.Context, call func(token string) e
 	p.mu.Lock()
 	p.Token = fresh
 	p.mu.Unlock()
-	err = call(fresh)
-	if err == nil || !isSessionExpired(err) {
-		return err
-	}
-	return err
+	return call(fresh)
 }
 
 // isSessionExpired 报告错误是否只是会话失效（可安全续期）。

@@ -48,6 +48,8 @@ type Permit struct {
 	MaxLeaseDuration time.Duration
 	// LeaseID 是中心签发的许可标识，仅用于审计。
 	LeaseID string
+	// ExpiresAt caps execution at the center’s original absolute deadline.
+	ExpiresAt time.Time
 }
 
 // Gate 是可选的中心许可检查。启用时每次用钥前必须先通过中心或短期许可。
@@ -130,11 +132,35 @@ func (o *Options) normalize() {
 
 // Authorization 是一次通过校验的用钥结果：许可与同版本完整凭证。
 type Authorization struct {
-	Lease   model.UseLease
-	Version model.CredentialVersion
-	Session model.Session
+	// Execution is canceled when the broker revokes a proxy use.
+	Execution context.Context
+	Lease     model.UseLease
+	Version   model.CredentialVersion
+	Session   model.Session
 	// Binding 是已校验的登记 Binding，供交付通道读取认证方案与目标。
 	Binding *model.Binding
+}
+
+// ExecutionContext links an operation to its original lease, caller, and expiry.
+func (a *Authorization) ExecutionContext(parent context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithDeadline(parent, a.Lease.UseLeaseExpiresAt)
+	if a.Execution == nil {
+		return ctx, cancel
+	}
+	stop := context.AfterFunc(a.Execution, cancel)
+	if a.Execution.Err() != nil {
+		cancel()
+	}
+	return ctx, func() {
+		stop()
+		cancel()
+	}
+}
+
+type liveLease struct {
+	model.UseLease
+	permit Permit
+	cancel context.CancelFunc
 }
 
 // Request 描述一次用钥申请。
@@ -158,7 +184,7 @@ type Broker struct {
 	sessions map[string]*model.Session
 	// tokenIndex 以令牌哈希索引会话，不保存令牌原文。
 	tokenIndex map[string]string
-	leases     map[string]*model.UseLease
+	leases     map[string]*liveLease
 	epoch      string
 	locked     bool
 
@@ -176,7 +202,7 @@ func New(st store.Store, src Source, opts Options) *Broker {
 		opts:        opts,
 		sessions:    map[string]*model.Session{},
 		tokenIndex:  map[string]string{},
-		leases:      map[string]*model.UseLease{},
+		leases:      map[string]*liveLease{},
 		epoch:       randomID(),
 		cleanupStop: make(chan struct{}),
 		cleanupDone: make(chan struct{}),
@@ -210,7 +236,9 @@ func (b *Broker) Lock(ctx context.Context) {
 		delete(b.tokenIndex, s.TokenHash)
 		_ = id
 	}
-	b.leases = map[string]*model.UseLease{}
+	for id := range b.leases {
+		b.removeLease(id)
+	}
 	b.mu.Unlock()
 	b.clearAuth("lock")
 	b.audit(ctx, store.AuditEvent{Mode: "control", Result: "lock", Detail: "vault locked; sessions and leases revoked"})
@@ -333,9 +361,14 @@ func (b *Broker) RequireAdmin(ctx context.Context, token secret.Value) (model.Se
 
 // CloseSession 撤销会话及其许可。
 func (b *Broker) CloseSession(ctx context.Context, sessionID string) error {
+	return b.CloseSessionForPrincipal(ctx, sessionID, "")
+}
+
+// CloseSessionForPrincipal limits closure to an owner, or permits any owner when principalID is empty.
+func (b *Broker) CloseSessionForPrincipal(ctx context.Context, sessionID, principalID string) error {
 	b.mu.Lock()
 	s, ok := b.sessions[sessionID]
-	if !ok {
+	if !ok || (principalID != "" && s.PrincipalID != principalID) {
 		b.mu.Unlock()
 		return store.ErrNotFound
 	}
@@ -346,7 +379,7 @@ func (b *Broker) CloseSession(ctx context.Context, sessionID string) error {
 	for id, l := range b.leases {
 		if l.SessionID == sessionID {
 			l.Status = model.StatusRevoked
-			delete(b.leases, id)
+			b.removeLease(id)
 		}
 	}
 	b.mu.Unlock()
@@ -355,20 +388,60 @@ func (b *Broker) CloseSession(ctx context.Context, sessionID string) error {
 	return nil
 }
 
+// CheckLease checks the original execution decision without loading credentials or renewing it.
+func (b *Broker) CheckLease(ctx context.Context, token secret.Value, original model.UseLease) error {
+	sess, err := b.SessionByToken(token)
+	if err != nil {
+		return err
+	}
+	b.mu.Lock()
+	lease := b.leases[original.ID]
+	if lease == nil || lease.SessionID != sess.ID {
+		b.mu.Unlock()
+		return model.NewError(model.CodeLeaseExpired, "use lease is no longer active")
+	}
+	err = b.revalidateDelivery(ctx, &lease.UseLease, sess,
+		&model.Binding{ID: lease.BindingID}, &model.Credential{ID: lease.CredentialID},
+		&model.Grant{ID: lease.GrantID})
+	permit := lease.permit
+	b.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if verifier, ok := b.opts.Gate.(interface {
+		CheckExecution(context.Context, Permit) error
+	}); ok && permit.LeaseID != "" {
+		return verifier.CheckExecution(ctx, permit)
+	}
+	return nil
+}
+
 // RevokeLease 撤销单个许可。
 func (b *Broker) RevokeLease(ctx context.Context, leaseID string) error {
+	return b.RevokeLeaseForPrincipal(ctx, leaseID, "")
+}
+
+// RevokeLeaseForPrincipal limits revocation to an owner, or permits any owner when principalID is empty.
+func (b *Broker) RevokeLeaseForPrincipal(ctx context.Context, leaseID, principalID string) error {
 	b.mu.Lock()
 	l, ok := b.leases[leaseID]
-	if ok {
-		l.Status = model.StatusRevoked
-		delete(b.leases, leaseID)
-	}
-	b.mu.Unlock()
 	if !ok {
+		b.mu.Unlock()
 		return store.ErrNotFound
 	}
+	var owner string
+	if s := b.sessions[l.SessionID]; s != nil {
+		owner = s.PrincipalID
+	}
+	if principalID != "" && owner != principalID {
+		b.mu.Unlock()
+		return store.ErrNotFound
+	}
+	l.Status = model.StatusRevoked
+	b.removeLease(leaseID)
+	b.mu.Unlock()
 	b.clearAuthForSession(l.SessionID)
-	b.audit(ctx, store.AuditEvent{SessionID: l.SessionID, BindingID: l.BindingID, Mode: string(l.DeliveryMode), Result: "revoked"})
+	b.audit(ctx, store.AuditEvent{PrincipalID: owner, SessionID: l.SessionID, BindingID: l.BindingID, Mode: string(l.DeliveryMode), Result: "revoked"})
 	return nil
 }
 
@@ -379,7 +452,7 @@ func (b *Broker) RevokeForCredential(ctx context.Context, credentialID string) i
 	for id, l := range b.leases {
 		if l.CredentialID == credentialID {
 			l.Status = model.StatusRevoked
-			delete(b.leases, id)
+			b.removeLease(id)
 			n++
 		}
 	}
@@ -395,6 +468,20 @@ func (b *Broker) RevokeForCredential(ctx context.Context, credentialID string) i
 // Authorize 按会话、Binding、交付模式与期限校验一次用钥，并返回同版本完整凭证。
 // 授权先于取值：任何一项不满足都不会读取凭证。
 func (b *Broker) Authorize(ctx context.Context, req Request) (*Authorization, error) {
+	return b.authorize(ctx, req, true)
+}
+
+// AuthorizeMetadata exercises the same policy without reading a credential.
+func (b *Broker) AuthorizeMetadata(ctx context.Context, req Request) (model.UseLease, error) {
+	authz, err := b.authorize(ctx, req, false)
+	if err != nil {
+		return model.UseLease{}, err
+	}
+	b.ReleaseLease(authz.Lease.ID)
+	return authz.Lease, nil
+}
+
+func (b *Broker) authorize(ctx context.Context, req Request, materialize bool) (*Authorization, error) {
 	start := b.opts.Now()
 	// 顺手清理已过期或已撤销的运行时记录，避免只增不减。
 	b.pruneExpired(start)
@@ -472,7 +559,7 @@ func (b *Broker) Authorize(ctx context.Context, req Request) (*Authorization, er
 	if b.opts.Gate != nil {
 		// 中心模式：以实际主体、方式和本机当前版本申请许可，再以完整裁定约束最终取值。
 		query := UseQuery{
-			PrincipalID:       grant.PrincipalID,
+			PrincipalID:       sess.PrincipalID,
 			BindingID:         binding.ID,
 			Mode:              req.Mode,
 			CredentialID:      cred.ID,
@@ -498,6 +585,9 @@ func (b *Broker) Authorize(ctx context.Context, req Request) (*Authorization, er
 		// 中心许可比本机上限更短时收紧。
 		expires = now.Add(permit.MaxLeaseDuration)
 	}
+	if !permit.ExpiresAt.IsZero() && permit.ExpiresAt.Before(expires) {
+		expires = permit.ExpiresAt
+	}
 	if sess.ExpiresAt.Before(expires) {
 		expires = sess.ExpiresAt
 	}
@@ -515,7 +605,9 @@ func (b *Broker) Authorize(ctx context.Context, req Request) (*Authorization, er
 		BindingID:                   binding.ID,
 		CredentialID:                cred.ID,
 		CredentialVersion:           cred.CurrentVersion,
+		GrantID:                     grant.ID,
 		GrantRevision:               grant.Revision,
+		Target:                      binding.UpstreamOrigin,
 		BindingRevision:             binding.Revision,
 		DeliveryMode:                req.Mode,
 		UseLeaseExpiresAt:           expires,
@@ -523,14 +615,19 @@ func (b *Broker) Authorize(ctx context.Context, req Request) (*Authorization, er
 		ProviderCredentialExpiresAt: cred.ProviderExpiresAt,
 		Status:                      model.StatusActive,
 	}
-	version, err := b.source.Materialize(ctx, lease.CredentialID, lease.CredentialVersion)
-	if err != nil {
-		b.audit(ctx, store.AuditEvent{PrincipalID: sess.PrincipalID, SessionID: sess.ID, BindingID: binding.ID, CredentialID: cred.ID, CredentialVersion: lease.CredentialVersion, Mode: string(req.Mode), Result: "denied", ErrorCode: string(model.CodeCredentialUnavailable)})
-		return nil, err
+	var version model.CredentialVersion
+	if materialize {
+		version, err = b.source.Materialize(ctx, lease.CredentialID, lease.CredentialVersion)
+		if err != nil {
+			b.audit(ctx, store.AuditEvent{PrincipalID: sess.PrincipalID, SessionID: sess.ID, BindingID: binding.ID, CredentialID: cred.ID, CredentialVersion: lease.CredentialVersion, Mode: string(req.Mode), Result: "denied", ErrorCode: string(model.CodeCredentialUnavailable)})
+			return nil, err
+		}
 	}
 	// 交付前重校验：验证、中心裁定与取值之间可能发生撤销、停用或轮换。
 	// 只有仍与这次决定一致的授权状态才允许交付，并以此阻止旧用钥决定继续生效。
+	b.mu.Lock()
 	if ferr := b.revalidateDelivery(ctx, lease, sess, binding, cred, grant); ferr != nil {
+		b.mu.Unlock()
 		b.audit(ctx, store.AuditEvent{
 			PrincipalID: sess.PrincipalID, SessionID: sess.ID, BindingID: binding.ID,
 			CredentialID: cred.ID, CredentialVersion: lease.CredentialVersion,
@@ -543,8 +640,12 @@ func (b *Broker) Authorize(ctx context.Context, req Request) (*Authorization, er
 		// 校验通过后才提交验证状态，下一次用钥才能复用。
 		b.opts.Auth.Commit(decision)
 	}
-	b.mu.Lock()
-	b.leases[lease.ID] = lease
+	var execution context.Context
+	entry := &liveLease{UseLease: *lease, permit: permit}
+	if materialize && req.Mode == model.ModeProxy {
+		execution, entry.cancel = context.WithCancel(context.Background())
+	}
+	b.leases[lease.ID] = entry
 	leaseCopy := *lease
 	b.mu.Unlock()
 	b.audit(ctx, store.AuditEvent{
@@ -554,31 +655,23 @@ func (b *Broker) Authorize(ctx context.Context, req Request) (*Authorization, er
 		DurationMS: time.Since(start).Milliseconds(), Detail: req.Purpose,
 		AuthMethod: authMethod, AuthResult: authResult,
 	})
-	return &Authorization{Lease: leaseCopy, Version: version, Session: sess, Binding: binding}, nil
+	return &Authorization{Execution: execution, Lease: leaseCopy, Version: version, Session: sess, Binding: binding}, nil
 }
 
 // revalidateDelivery 在取到同版本材料之后、登记许可之前重新核对这次用钥决定的前提。
-// 会话、代次、授权、绑定与凭证版本任一项发生变化都返回稳定错误，调用方不得交付。
+// 调用者持有 b.mu，保证锁库和会话关闭与许可提交有序。
 func (b *Broker) revalidateDelivery(ctx context.Context, lease *model.UseLease, sess model.Session, binding *model.Binding, cred *model.Credential, grant *model.Grant) error {
-	b.mu.Lock()
 	live, ok := b.sessions[sess.ID]
-	locked := b.locked
-	epoch := b.epoch
-	liveStatus := model.StatusRevoked
-	if ok {
-		liveStatus = live.Status
-	}
-	b.mu.Unlock()
-	if locked || b.source.Locked() {
+	if b.locked || b.source.Locked() {
 		return model.NewError(model.CodeVaultLocked, "vault was locked while the use was being authorized")
 	}
 	if !ok {
 		return model.NewError(model.CodeSessionInvalid, "session was closed while the use was being authorized")
 	}
-	if liveStatus != model.StatusActive {
-		return model.NewError(model.CodeSessionInvalid, "session is %s", liveStatus)
+	if live.Status != model.StatusActive {
+		return model.NewError(model.CodeSessionInvalid, "session is %s", live.Status)
 	}
-	if epoch != lease.AuthorizationEpoch {
+	if b.epoch != lease.AuthorizationEpoch {
 		return model.NewError(model.CodeSessionInvalid, "authorization epoch changed while the use was being authorized")
 	}
 	if !b.opts.Now().Before(sess.ExpiresAt) {
@@ -588,7 +681,7 @@ func (b *Broker) revalidateDelivery(ctx context.Context, lease *model.UseLease, 
 	if err != nil {
 		return model.NewError(model.CodeBindingDisabled, "binding %s is no longer registered", binding.ID)
 	}
-	if freshBinding.Status != model.StatusActive || freshBinding.Revision != lease.BindingRevision {
+	if freshBinding.Status != model.StatusActive || freshBinding.Revision != lease.BindingRevision || freshBinding.UpstreamOrigin != lease.Target {
 		return model.NewError(model.CodeBindingDisabled, "binding %s changed while the use was being authorized", binding.ID)
 	}
 	freshGrant, err := b.store.GetGrant(ctx, grant.ID)
@@ -605,6 +698,12 @@ func (b *Broker) revalidateDelivery(ctx context.Context, lease *model.UseLease, 
 	if freshCred.CurrentVersion != lease.CredentialVersion {
 		return model.NewError(model.CodeCredentialUnavailable,
 			"credential %s was rotated to version %d while the use was being authorized", cred.ID, freshCred.CurrentVersion)
+	}
+	if b.source.Locked() {
+		return model.NewError(model.CodeVaultLocked, "vault was locked while the use was being authorized")
+	}
+	if !b.opts.Now().Before(lease.UseLeaseExpiresAt) {
+		return model.NewError(model.CodeLeaseExpired, "authorization expired before delivery")
 	}
 	return nil
 }
@@ -638,7 +737,7 @@ func (b *Broker) pruneExpired(now time.Time) {
 	}
 	for id, l := range b.leases {
 		if l.Status != model.StatusActive || !now.Before(l.UseLeaseExpiresAt) {
-			delete(b.leases, id)
+			b.removeLease(id)
 		}
 	}
 }
@@ -657,8 +756,15 @@ func (b *Broker) Lease(id string) (model.UseLease, error) {
 	if !ok {
 		return model.UseLease{}, store.ErrNotFound
 	}
-	cp := *l
-	return cp, nil
+	return l.UseLease, nil
+}
+
+// removeLease is called under b.mu and wakes local executors before returning.
+func (b *Broker) removeLease(leaseID string) {
+	if lease := b.leases[leaseID]; lease != nil && lease.cancel != nil {
+		lease.cancel()
+	}
+	delete(b.leases, leaseID)
 }
 
 // ReleaseLease 在调用方用完一次许可后立即释放。
@@ -669,7 +775,7 @@ func (b *Broker) ReleaseLease(leaseID string) {
 		return
 	}
 	b.mu.Lock()
-	delete(b.leases, leaseID)
+	b.removeLease(leaseID)
 	b.mu.Unlock()
 }
 
@@ -691,7 +797,9 @@ func (b *Broker) CloseAll(ctx context.Context) {
 		delete(b.sessions, id)
 	}
 	b.tokenIndex = map[string]string{}
-	b.leases = map[string]*model.UseLease{}
+	for id := range b.leases {
+		b.removeLease(id)
+	}
 	b.mu.Unlock()
 	b.clearAuth("shutdown")
 	b.audit(ctx, store.AuditEvent{Mode: "control", Result: "shutdown", Detail: "runtime sessions cleared"})
@@ -791,13 +899,21 @@ func (b *Broker) clearAuthForSession(sessionID string) {
 	}
 }
 
-// ClearAuthForGrant 让某个授权的验证状态立即失效（授权撤销、策略变更时调用）。
-func (b *Broker) ClearAuthForGrant(ctx context.Context, grantID, reason string) {
-	if b.opts.Auth == nil {
-		return
+// InvalidateGrant ends committed uses and cached verification for a changed grant.
+func (b *Broker) InvalidateGrant(ctx context.Context, grantID, reason string) {
+	b.mu.Lock()
+	for id, lease := range b.leases {
+		if lease.GrantID == grantID {
+			b.removeLease(id)
+		}
 	}
-	if n := b.opts.Auth.Cache().ClearForGrant(grantID); n > 0 {
-		b.audit(ctx, store.AuditEvent{Mode: "control", Result: "auth_cache_cleared", AuthResult: "not_required", Detail: fmt.Sprintf("grant %s %s: %d verifications dropped", grantID, reason, n)})
+	var cleared int
+	if b.opts.Auth != nil {
+		cleared = b.opts.Auth.Cache().ClearForGrant(grantID)
+	}
+	b.mu.Unlock()
+	if cleared > 0 {
+		b.audit(ctx, store.AuditEvent{Mode: "control", Result: "auth_cache_cleared", AuthResult: "not_required", Detail: fmt.Sprintf("grant %s %s: %d verifications dropped", grantID, reason, cleared)})
 	}
 }
 

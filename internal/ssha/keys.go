@@ -1,8 +1,6 @@
 // Package ssha 实现受保护的本地 SSH Agent 服务端。
 //
-// 约束：agent 不持有长期私钥。每次签名都通过本机 IPC 向受信中介申请一次材料，
-// 解析后立即清除明文缓冲，签名完成即丢弃引用。私钥、完整待签数据与签名材料
-// 都不进入日志；可审计的只有会话、Binding、凭证与结果等元数据。
+// The SSH agent requests signatures from the daemon without receiving private keys.
 package ssha
 
 import (
@@ -36,12 +34,12 @@ type KeyInfo struct {
 	ErrorCode string `json:"error_code,omitempty"`
 }
 
-// Provider 由受信中介提供密钥元数据与一次性签名材料。
+// Provider 由受信中介提供公钥元数据与签名结果。
 type Provider interface {
 	// ListKeys 只返回当前会话持有 sign 许可的托管密钥元数据。
 	ListKeys(ctx context.Context) ([]KeyInfo, error)
-	// ResolveMaterial 按 Binding 取得一次签名材料；调用方负责 Wipe。
-	ResolveMaterial(ctx context.Context, bindingID string) (*Material, error)
+	// Sign 按 Binding 使用相应密钥签名。
+	Sign(ctx context.Context, bindingID string, data []byte, flags agent.SignatureFlags) (*ssh.Signature, error)
 }
 
 // Material 是一次签名所需的私钥材料，生存期只覆盖一次签名。

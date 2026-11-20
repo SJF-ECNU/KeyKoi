@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 
+	"golang.org/x/crypto/ssh/agent"
+
 	"keykoi/internal/broker"
 	"keykoi/internal/model"
 	"keykoi/internal/secret"
@@ -99,23 +101,17 @@ func (d *Daemon) handleSSHKeys(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"principal_id": principal, "keys": keys})
 }
 
-// sshSignMaterialFields 是 SSH Agent 可取得的字段白名单。签名只需要私钥与可选口令，
-// 其他字段（例如 access_secret 或会话令牌）不随响应离开后台。
-var sshSignMaterialFields = []string{"private_key", "private_key_passphrase"}
-
-// handleSSHSignMaterial 交付一次 SSH 签名材料。
-//
-// 它与通用解析接口分开：只有 sign 许可、ssh_key 类型凭证和字段白名单内的材料会返回，
-// 因此「具备签名权限」不再等价于「可以取得整组原始凭证」。许可仍由 Broker 授权，
-// 撤销、轮换与锁定在读值前后都会重新核对。
-func (d *Daemon) handleSSHSignMaterial(w http.ResponseWriter, r *http.Request) {
+// handleSSHSign signs inside the daemon and returns only the signature.
+func (d *Daemon) handleSSHSign(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeAPIError(w, model.NewError("", "method not allowed"))
 		return
 	}
 	var body struct {
-		Token     string `json:"token"`
-		BindingID string `json:"binding_id"`
+		Token     string               `json:"token"`
+		BindingID string               `json:"binding_id"`
+		Data      []byte               `json:"data"`
+		Flags     agent.SignatureFlags `json:"flags"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeAPIError(w, err)
@@ -126,49 +122,28 @@ func (d *Daemon) handleSSHSignMaterial(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	authz, err := d.broker.Authorize(r.Context(), broker.Request{
-		Token:     secret.New(body.Token),
-		BindingID: body.BindingID,
-		Mode:      model.ModeSign,
-		Purpose:   "ssh sign material",
+		Token: secret.New(body.Token), BindingID: body.BindingID,
+		Mode: model.ModeSign, Purpose: "ssh sign",
 	})
 	if err != nil {
 		writeAPIError(w, err)
 		return
 	}
-	// 材料只在本次响应中交付；请求结束后立即释放许可，成功路径同样不驻留。
 	defer d.broker.ReleaseLease(authz.Lease.ID)
 	cred, err := d.store.GetCredential(r.Context(), authz.Lease.CredentialID)
 	if err != nil || cred.Kind != model.KindSSHKey {
-		// 签名材料接口只服务 ssh_key；失败时撤销刚建立的许可。
-		_ = d.broker.RevokeLease(r.Context(), authz.Lease.ID)
 		writeAPIError(w, model.NewError(model.CodeCredentialUnavailable,
 			"binding %s is not an ssh_key binding", body.BindingID))
 		return
 	}
-	fields := map[string]string{}
-	for _, name := range sshSignMaterialFields {
-		value, ferr := authz.Version.Field(name)
-		if ferr != nil || value.IsEmpty() {
-			continue
-		}
-		fields[name] = value.RevealString()
-	}
-	if fields["private_key"] == "" {
-		_ = d.broker.RevokeLease(r.Context(), authz.Lease.ID)
-		writeAPIError(w, model.NewError(model.CodeCredentialUnavailable,
-			"credential %s has no private_key field", cred.ID))
+	key, _ := authz.Version.Field("private_key")
+	passphrase, _ := authz.Version.Field("private_key_passphrase")
+	signature, err := ssha.Sign(&ssha.Material{PrivateKeyPEM: key.Reveal(), Passphrase: passphrase.Reveal()}, body.Data, body.Flags, nil)
+	if err != nil {
+		writeAPIError(w, err)
 		return
 	}
-	// 签名材料只被消费一次：交付后立即释放许可。
-	d.broker.ReleaseLease(authz.Lease.ID)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"lease":               authz.Lease,
-		"credential_id":       authz.Lease.CredentialID,
-		"credential_version":  authz.Lease.CredentialVersion,
-		"fields":              fields,
-		"binding":             authz.Binding,
-		"provider_expires_at": authz.Lease.ProviderCredentialExpiresAt,
-	})
+	writeJSON(w, http.StatusOK, signature)
 }
 
 // sshKeyRequester 解析调用主体。会话令牌优先；没有令牌时接受本机管理令牌。

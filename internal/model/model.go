@@ -324,7 +324,9 @@ type UseLease struct {
 	BindingID                   string       `json:"binding_id"`
 	CredentialID                string       `json:"credential_id"`
 	CredentialVersion           int          `json:"credential_version"`
+	GrantID                     string       `json:"grant_id"`
 	GrantRevision               int64        `json:"grant_revision"`
+	Target                      string       `json:"-"`
 	BindingRevision             int64        `json:"binding_revision"`
 	DeliveryMode                DeliveryMode `json:"delivery_mode"`
 	UseLeaseExpiresAt           time.Time    `json:"use_lease_expires_at"`

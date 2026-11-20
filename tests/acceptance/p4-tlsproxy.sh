@@ -88,9 +88,9 @@ CRED="$("$BIN/keykoi" --json credential add --kind api_key --label "p4 tls upstr
 "$BIN/keykoi" --json binding add --id bind_p4_tls_bad --credential "$CRED" \
   --origin "$BAD_ORIGIN" --route p4-tls-bad --scheme bearer >/dev/null
 "$BIN/keykoi" --json grant add --principal "$CLIENT_PRINCIPAL" --binding bind_p4_tls_good \
-  --mode runtime_delivery --max-lease-seconds 600 --auth permanent >/dev/null
+  --mode proxy --max-lease-seconds 600 --auth permanent >/dev/null
 "$BIN/keykoi" --json grant add --principal "$CLIENT_PRINCIPAL" --binding bind_p4_tls_bad \
-  --mode runtime_delivery --max-lease-seconds 600 --auth permanent >/dev/null
+  --mode proxy --max-lease-seconds 600 --auth permanent >/dev/null
 
 log "starting keykoi tls-proxy"
 # 代理不再本地解锁密钥库：用钥决定交给运行中的 keykoid（锁定、验证与中心策略统一生效）。
@@ -112,6 +112,10 @@ PROXY_ADDR="$(sed -n 's/^listen=//p' "$WORK/proxy.out" | head -1)"
 [ -n "$PROXY_ADDR" ] || fail "proxy did not print its listen address"
 PROXY_PORT="${PROXY_ADDR##*:}"
 PROXY_URL="http://$PROXY_ADDR"
+PROXY_TOKEN_FILE="$(sed -n 's/^proxy_token_file=//p' "$WORK/proxy.out" | head -1)"
+[ -n "$PROXY_TOKEN_FILE" ] && [ -f "$PROXY_TOKEN_FILE" ] || fail "proxy did not provide a token file"
+PROXY_CURL_CONFIG="$WORK/proxy.curlrc"
+(umask 077; printf 'proxy-user = "keykoi:%s"\n' "$(cat "$PROXY_TOKEN_FILE")" >"$PROXY_CURL_CONFIG")
 log "proxy=$PROXY_URL proxy-ca=$PROXY_CA"
 
 CHECK_RESULTS=()
@@ -148,7 +152,7 @@ stats_field() { # ca-file host port field
 }
 
 log "P4.2.1 合法链路：curl 经代理访问已登记域名"
-curl -sS --max-time 15 --proxy "$PROXY_URL" --cacert "$PROXY_CA" \
+curl -sS --max-time 15 --config "$PROXY_CURL_CONFIG" --proxy "$PROXY_URL" --cacert "$PROXY_CA" \
   "https://$GOOD_HOST:$GOOD_PORT/echo?a=1&a=2" >"$WORK/legal.json" 2>"$WORK/legal.err" || \
   fail "legal request failed: $(cat "$WORK/legal.err")"
 check "proxy injects real credential on registered domain" "true" "$(json_field "$WORK/legal.json" matched)"
@@ -158,7 +162,7 @@ CHECK_RESULTS+=("INFO|legal-response|$(tr -d '\n' <"$WORK/legal.json" | head -c 
 
 log "P4.2.2 未登记域名：CONNECT 被拒绝，不注入凭证"
 set +e
-curl -sS --max-time 10 --proxy "$PROXY_URL" --cacert "$PROXY_CA" \
+curl -sS --max-time 10 --config "$PROXY_CURL_CONFIG" --proxy "$PROXY_URL" --cacert "$PROXY_CA" \
   "https://$UNREGISTERED_HOST:443/echo" >"$WORK/unregistered.out" 2>"$WORK/unregistered.err"
 UNREGISTERED_EXIT=$?
 set -e
@@ -167,12 +171,12 @@ if [ "$UNREGISTERED_EXIT" -ne 0 ] && grep -Eq '403|CONNECT' "$WORK/unregistered.
 else
   check "unregistered domain CONNECT rejected" "ok" "exit=$UNREGISTERED_EXIT $(tr '\n' ' ' <"$WORK/unregistered.err" | head -c 200)"
 fi
-check "rejection is reported without injection" "logged" "$({ grep -c 'not registered for this proxy' "$WORK/proxy.log" 2>/dev/null || true; } | awk '{print ($1 > 0) ? "logged" : "missing"}')"
+check "rejection is reported without injection" "logged" "$({ grep -c 'not registered for this proxy' "$WORK/keykoid.log" 2>/dev/null || true; } | awk '{print ($1 > 0) ? "logged" : "missing"}')"
 CHECK_RESULTS+=("INFO|unregistered-curl|exit=$UNREGISTERED_EXIT $(tr '\n' ' ' <"$WORK/unregistered.err" | head -c 300)")
 
 log "P4.2.3 客户端不信任代理 CA（等同证书固定/未安装信任）"
 set +e
-curl -sS --max-time 15 --proxy "$PROXY_URL" --cacert "$WORK/up-good-ca/ca.pem" \
+curl -sS --max-time 15 --config "$PROXY_CURL_CONFIG" --proxy "$PROXY_URL" --cacert "$WORK/up-good-ca/ca.pem" \
   "https://$GOOD_HOST:$GOOD_PORT/echo" >"$WORK/untrusted.out" 2>"$WORK/untrusted.err"
 UNTRUSTED_EXIT=$?
 set -e
@@ -182,12 +186,12 @@ else
   check "client without proxy CA trust fails verification" "verified_failure" "exit=$UNTRUSTED_EXIT $(tr '\n' ' ' <"$WORK/untrusted.err" | head -c 200)"
 fi
 check "untrusted client recorded as unsupported" "recorded" \
-  "$({ grep -c 'recorded as unsupported' "$WORK/proxy.log" 2>/dev/null || true; } | awk '{print ($1 > 0) ? "recorded" : "missing"}')"
+  "$({ grep -c 'recorded as unsupported' "$WORK/keykoid.log" 2>/dev/null || true; } | awk '{print ($1 > 0) ? "recorded" : "missing"}')"
 CHECK_RESULTS+=("INFO|untrusted-ca-curl|exit=$UNTRUSTED_EXIT $(tr '\n' ' ' <"$WORK/untrusted.err" | head -c 300)")
 
 log "P4.2.4 上游证书错误：在 CONNECT 阶段终止，凭证不离开代理"
 set +e
-curl -sS --max-time 15 --proxy "$PROXY_URL" --cacert "$PROXY_CA" \
+curl -sS --max-time 15 --config "$PROXY_CURL_CONFIG" --proxy "$PROXY_URL" --cacert "$PROXY_CA" \
   "https://$BAD_HOST:$BAD_PORT/echo" >"$WORK/bad.out" 2>"$WORK/bad.err"
 BAD_EXIT=$?
 set -e
@@ -197,8 +201,8 @@ else
   check "invalid upstream certificate terminates CONNECT" "terminated_with_502" "exit=$BAD_EXIT $(tr '\n' ' ' <"$WORK/bad.err" | head -c 200)"
 fi
 check "upstream TLS rejection is identifiable" "logged" \
-  "$({ grep -c 'upstream_tls_invalid' "$WORK/proxy.log" 2>/dev/null || true; } | awk '{print ($1 > 0) ? "logged" : "missing"}')"
-CHECK_RESULTS+=("INFO|upstream-rejection-detail|$(grep 'upstream_tls_invalid' "$WORK/proxy.log" | head -1 | head -c 300)")
+  "$({ grep -c 'upstream_tls_invalid' "$WORK/keykoid.log" 2>/dev/null || true; } | awk '{print ($1 > 0) ? "logged" : "missing"}')"
+CHECK_RESULTS+=("INFO|upstream-rejection-detail|$(grep 'upstream_tls_invalid' "$WORK/keykoid.log" | head -1 | head -c 300)")
 CHECK_RESULTS+=("INFO|upstream-error-curl|exit=$BAD_EXIT $(tr '\n' ' ' <"$WORK/bad.err" | head -c 300)")
 
 log "P4.2.5 上游与传输侧核对"

@@ -22,6 +22,7 @@ package mysqlproxy
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -43,20 +44,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"keykoi/internal/ipcclient"
 	"keykoi/internal/model"
+	"keykoi/internal/osruntime"
+	"keykoi/internal/proxylease"
 	"keykoi/internal/secret"
 )
 
-// Broker 是代理访问后台运行面的最小接口。*ipcclient.Client 直接满足它。
-//
-// 目标与凭证来自同一次授权：Resolve 的返回同时带 Binding 快照与凭证字段，
-// 代理不再列出 /v1/bindings；既有连接只用 Get 读单条元数据核对改绑。
-type Broker interface {
-	Resolve(token, bindingID, mode string) (*ipcclient.Resolved, error)
-	// Get 读取单条绑定元数据，供既有连接核对改绑；它不返回凭证，也不建立许可。
-	Get(path string, out any) error
-}
+// Broker is the local authority used by the daemon-owned adapter.
+type Broker = proxylease.Authority
 
 // Config 配置代理。
 type Config struct {
@@ -109,9 +104,9 @@ func (c *Config) normalize() error {
 	if c.DialTimeout <= 0 {
 		c.DialTimeout = 10 * time.Second
 	}
-	if c.RevalidateInterval <= 0 || c.RevalidateInterval > bindingCheckInterval {
+	if c.RevalidateInterval <= 0 || c.RevalidateInterval > proxylease.Interval {
 		// 超过 1 秒的配置会削弱“改绑后最多 1 秒内被发现”的保证，统一收紧到上限。
-		c.RevalidateInterval = bindingCheckInterval
+		c.RevalidateInterval = proxylease.Interval
 	}
 	if c.MaxConnections <= 0 {
 		c.MaxConnections = 64
@@ -190,17 +185,7 @@ func (s *Server) Config() Config { return s.cfg }
 
 // Listen 绑定客户端监听地址。端口 0 时由系统分配，Addrs 给出实际地址。
 func (s *Server) Listen() error {
-	host, _, err := net.SplitHostPort(s.cfg.ListenAddr)
-	if err != nil {
-		return fmt.Errorf("mysqlproxy: invalid listen address %q: %w", s.cfg.ListenAddr, err)
-	}
-	if host != "" && host != "localhost" {
-		ip := net.ParseIP(host)
-		if ip == nil || !ip.IsLoopback() {
-			return fmt.Errorf("mysqlproxy: listen address %q must be a loopback address", s.cfg.ListenAddr)
-		}
-	}
-	ln, err := net.Listen("tcp", s.cfg.ListenAddr)
+	ln, err := osruntime.ListenLoopbackTCP(s.cfg.ListenAddr)
 	if err != nil {
 		return fmt.Errorf("mysqlproxy: listen: %w", err)
 	}
@@ -279,7 +264,7 @@ func (s *Server) Serve(ctx context.Context) error {
 				s.wg.Add(1)
 				go func() {
 					defer s.wg.Done()
-					s.handle(c)
+					s.handle(ctx, c)
 				}()
 			}
 		}(ln)
@@ -412,7 +397,7 @@ func generateSelfSignedCert() (tls.Certificate, error) {
 }
 
 // handle 处理一条客户端连接。
-func (s *Server) handle(rawConn net.Conn) {
+func (s *Server) handle(ctx context.Context, rawConn net.Conn) {
 	s.total.Add(1)
 	remote := rawConn.RemoteAddr().String()
 	if s.active.Add(1) > int64(s.cfg.MaxConnections) {
@@ -497,7 +482,7 @@ func (s *Server) handle(rawConn net.Conn) {
 		return
 	}
 
-	target, err := s.resolveTarget(token, resp.database)
+	target, err := s.resolveTarget(ctx, token, resp.database)
 	if err != nil {
 		s.denied.Add(1)
 		_ = writePacket(conn, outSeq, errorPacket(errAccessDenied, sqlStateAccess, "Access denied: session token is not authorized to use this binding"))
@@ -505,6 +490,8 @@ func (s *Server) handle(rawConn net.Conn) {
 		return
 	}
 
+	defer target.use.Finish()
+	defer target.use.Track(conn)()
 	up, err := dialUpstream(target, upstreamOptions{
 		timeout:  s.cfg.DialTimeout,
 		insecure: s.cfg.InsecureUpstream,
@@ -518,6 +505,7 @@ func (s *Server) handle(rawConn net.Conn) {
 		return
 	}
 	defer up.close()
+	defer target.use.Track(up.conn)()
 
 	if err := up.handshake(); err != nil {
 		s.denied.Add(1)
@@ -581,66 +569,52 @@ func (s *Server) readToken(conn net.Conn, reader *bufio.Reader, seq byte, secure
 
 // resolveTarget 用一次授权换取目标与凭证：上游地址只从 resolved.Binding 取。
 // 不再单独读取 /v1/bindings，改绑时的在途请求不会用旧目标配新密码。
-func (s *Server) resolveTarget(token, clientDatabase string) (UpstreamTarget, error) {
-	resolved, err := s.broker.Resolve(token, s.cfg.BindingID, string(model.ModeRuntimeDelivery))
-	if resolved != nil {
-		defer s.releaseLease(resolved)
-	}
+func (s *Server) resolveTarget(ctx context.Context, token, clientDatabase string) (UpstreamTarget, error) {
+	sessionToken := secret.New(token)
+	resolved, err := proxylease.Authorize(ctx, s.broker, sessionToken, s.cfg.BindingID, s.cfg.AuthTimeout)
 	if err != nil {
-		return UpstreamTarget{}, denialForResolveError(err)
+		return UpstreamTarget{}, proxylease.Denial(err)
 	}
-	binding, err := authorizedBinding(resolved, s.cfg.BindingID)
+	use, err := proxylease.Begin(s.broker, sessionToken, resolved, s.cfg.RevalidateInterval)
 	if err != nil {
 		return UpstreamTarget{}, err
 	}
-	origin, err := binding.Origin()
+	accepted := false
+	defer func() {
+		if !accepted {
+			use.Finish()
+		}
+	}()
+	binding, err := proxylease.Binding(resolved, s.cfg.BindingID)
 	if err != nil {
-		return UpstreamTarget{}, errors.New("binding has an invalid upstream origin")
+		return UpstreamTarget{}, err
 	}
-	host := origin.Hostname()
-	port := origin.Port()
-	if port == "" {
-		port = "3306"
+	target, err := binding.DatabaseTarget(model.ProtocolMySQL, "3306")
+	if err != nil {
+		return UpstreamTarget{}, err
 	}
-	if host == "" {
-		return UpstreamTarget{}, errors.New("binding has no upstream host")
-	}
-	userField := firstNonEmpty(s.cfg.UsernameField, binding.UsernameField, "username")
-	passField := firstNonEmpty(s.cfg.PasswordField, binding.PasswordField, "password")
-	user := resolved.Fields[userField]
-	password := resolved.Fields[passField]
-	if user == "" || password == "" {
+
+	userField := cmp.Or(s.cfg.UsernameField, binding.UsernameField, "username")
+	passField := cmp.Or(s.cfg.PasswordField, binding.PasswordField, "password")
+	user := resolved.Version.Fields[userField].RevealString()
+	password := resolved.Version.Fields[passField]
+	if user == "" || password.IsEmpty() {
 		return UpstreamTarget{}, fmt.Errorf("credential is missing fields %q/%q for the mysql adapter", userField, passField)
 	}
-	database := resolved.Fields[s.cfg.DatabaseField]
+	database := resolved.Version.Fields[s.cfg.DatabaseField].RevealString()
 	if database == "" {
 		database = clientDatabase
 	}
+	accepted = true
 	return UpstreamTarget{
-		Host:           host,
-		Port:           port,
-		User:           user,
-		Password:       secret.New(password),
-		Database:       database,
-		Addr:           net.JoinHostPort(host, port),
-		Revision:       binding.Revision,
-		UpstreamOrigin: binding.UpstreamOrigin,
+		Host:     target.Host,
+		Port:     target.Port,
+		User:     user,
+		Password: password,
+		Database: database,
+		Addr:     target.Address(),
+		use:      use,
 	}, nil
-}
-
-// authorizedBinding 取出这次授权校验过的 Binding 快照；缺失或指向别的绑定都拒绝。
-func authorizedBinding(resolved *ipcclient.Resolved, bindingID string) (*model.Binding, error) {
-	if resolved == nil || resolved.Binding == nil {
-		return nil, errors.New("authorization returned no binding snapshot")
-	}
-	binding := resolved.Binding
-	if binding.ID != "" && binding.ID != bindingID {
-		return nil, errors.New("authorization returned a binding snapshot for another binding")
-	}
-	if binding.Status != "" && binding.Status != model.StatusActive {
-		return nil, errors.New("binding is " + string(binding.Status))
-	}
-	return binding, nil
 }
 
 // prefixedConn 让 TLS 层先读 bufio 已预读、但还没被消费的字节，再读底层连接。
@@ -652,26 +626,12 @@ type prefixedConn struct {
 
 func (c *prefixedConn) Read(p []byte) (int, error) { return c.buffered.Read(p) }
 
-// releaseLease 立即释放一次 Resolve 创建的许可；凭证与目标仍只使用同次返回的快照。
-func (s *Server) releaseLease(resolved *ipcclient.Resolved) {
-	if resolved == nil || resolved.Lease.ID == "" {
-		return
-	}
-	revoker, ok := s.broker.(interface{ RevokeLease(string) error })
-	if !ok {
-		return
-	}
-	if err := revoker.RevokeLease(resolved.Lease.ID); err != nil {
-		s.logger.Printf("mysql-proxy revoke lease: %v", err)
-	}
-}
-
 // relay 认证完成后双向按字节转发。
 //
 // 客户端→上游方向同时承担改绑核对：每一轮转发前后按时间戳判断是否到点，
 // 到点用 Get 读一次绑定详情（最多每秒一次），不另起后台 goroutine。
 func (s *Server) relay(conn net.Conn, clientReader *bufio.Reader, up *upstream) {
-	watch := s.newBindingWatch(up.target)
+	watch := up.target.use
 
 	done := make(chan struct{}, 2)
 	go func() {
@@ -697,16 +657,16 @@ func (s *Server) relay(conn net.Conn, clientReader *bufio.Reader, up *upstream) 
 //
 // 读截止时间只用来按时唤醒核对：空闲连接按 RevalidateInterval 超时一次，
 // 有数据时立即继续转发，字节流语义不变。
-func (s *Server) copyClientToUpstream(conn net.Conn, clientReader *bufio.Reader, up *upstream, watch *bindingWatch) {
+func (s *Server) copyClientToUpstream(conn net.Conn, clientReader *bufio.Reader, up *upstream, watch *proxylease.Use) {
 	buf := make([]byte, 32<<10)
 	for {
-		if watch.due(time.Now()) && watch.changed() {
+		if watch.Changed() {
 			// 协议层先回错误再断开：沿用现有 ERR 包路径，客户端能看到明确原因。
 			_ = writePacket(conn, 0, errorPacket(errAccessDenied, sqlStateAccess,
 				"Access denied: the binding authorization changed; reconnect"))
 			return
 		}
-		if err := conn.SetReadDeadline(time.Now().Add(watch.interval)); err != nil {
+		if err := conn.SetReadDeadline(time.Now().Add(watch.Interval)); err != nil {
 			return
 		}
 		n, err := clientReader.Read(buf)
@@ -728,33 +688,6 @@ func (s *Server) copyClientToUpstream(conn net.Conn, clientReader *bufio.Reader,
 			return
 		}
 	}
-}
-
-// denialForResolveError 把后台稳定错误码映射为客户端可见的认证失败。
-func denialForResolveError(err error) error {
-	var apiErr *ipcclient.APIError
-	if errors.As(err, &apiErr) {
-		switch model.Code(apiErr.Code) {
-		case model.CodeSessionInvalid, model.CodeUseNotAllowed, model.CodeLeaseExpired:
-			return errors.New("session token is not authorized to use this binding")
-		case model.CodeBindingDisabled:
-			return errors.New("binding is not available")
-		case model.CodeVaultLocked:
-			return errors.New("keykoi vault is locked")
-		case model.CodeCredentialUnavailable:
-			return errors.New("credential is unavailable")
-		}
-	}
-	return errors.New("keykoid resolve failed")
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 func isClosedErr(err error) bool {

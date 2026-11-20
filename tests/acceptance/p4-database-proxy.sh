@@ -123,7 +123,7 @@ MASTER_PASSWORD="$(openssl rand -hex 16)"
 printf '%s\n' "$MASTER_PASSWORD" | "$BIN/keykoi" init --password-stdin >/dev/null
 unset MASTER_PASSWORD
 
-log "seeding database credential, bindings and runtime_delivery grant"
+log "seeding database credential, bindings and proxy grant"
 CRED="$("$BIN/keykoi" --json credential add --kind database --label "p4 postgres" \
   --field "username=$ROLE_NAME" --field "password=$DB_PASSWORD" --field "database=$DB_NAME")"
 [ -n "$CRED" ] || fail "credential was not created"
@@ -138,7 +138,7 @@ BINDING_NOGRANT="bind_p4_pg_nogrant"
   --origin "http://$DB_HOST:$DB_PORT" --route p4-pg-nogrant --scheme basic \
   --username-field username --password-field password >/dev/null
 "$BIN/keykoi" --json grant add --principal "principal_local_$(id -u)" \
-  --binding "$BINDING" --mode runtime_delivery --auth permanent --max-lease-seconds 600 >/dev/null
+  --binding "$BINDING" --mode proxy --auth permanent --max-lease-seconds 600 >/dev/null
 
 start_proxy() { # binding out-prefix -> 设置 PROXY_PORT / PROXY_TOKEN
   local binding="$1" prefix="$2"
@@ -201,9 +201,9 @@ PGPASSWORD="$NO_GRANT_TOKEN" psql -X -tA -c 'select 1' \
 NO_GRANT_EXIT=$?
 set -e
 if [ "$NO_GRANT_EXIT" -ne 0 ] && grep -q "not authorized" "$WORK/no-grant.out"; then
-  check "binding without runtime_delivery grant rejected" "denied" "denied"
+  check "binding without proxy grant rejected" "denied" "denied"
 else
-  check "binding without runtime_delivery grant rejected" "denied" "exit=$NO_GRANT_EXIT $(tail -1 "$WORK/no-grant.out" | tr '\n' ' ')"
+  check "binding without proxy grant rejected" "denied" "exit=$NO_GRANT_EXIT $(tail -1 "$WORK/no-grant.out" | tr '\n' ' ')"
 fi
 
 # 客户端侧 TLS 不在支持范围：代理对 SSLRequest 回 'N'，libpq 在 sslmode=require 时明确报错。
@@ -283,7 +283,7 @@ if [ -x "$INITDB" ] && [ -x "$PG_CTL" ] && command -v openssl >/dev/null 2>&1; t
     --origin "http://127.0.0.1:$TLS_PORT" --route p4-pg-tls --scheme basic \
     --username-field username --password-field password >/dev/null
   "$BIN/keykoi" --json grant add --principal "principal_local_$(id -u)" \
-    --binding "$TLS_BINDING" --mode runtime_delivery --auth permanent --max-lease-seconds 600 >/dev/null
+    --binding "$TLS_BINDING" --mode proxy --auth permanent --max-lease-seconds 600 >/dev/null
 
   # 正例：用私有 CA 校验证书，上游连接必须是 TLS。
   "$BIN/keykoi" db-proxy --binding "$TLS_BINDING" --listen 127.0.0.1:0 \

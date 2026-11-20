@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"keykoi/internal/broker"
+	"keykoi/internal/httpforward"
 	"keykoi/internal/model"
 	"keykoi/internal/secret"
 	"keykoi/internal/store"
@@ -121,6 +122,13 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// 一次请求用一次许可：响应结束即释放，不把短期许可留到会话关闭。
 	defer g.broker.ReleaseLease(authz.Lease.ID)
+	ctx, cancel := authz.ExecutionContext(r.Context())
+	defer cancel()
+	controller := http.NewResponseController(w)
+	if controller.SetWriteDeadline(authz.Lease.UseLeaseExpiresAt) == nil {
+		defer controller.SetWriteDeadline(time.Time{})
+	}
+	r = r.WithContext(ctx)
 	binding := bindingFor(authz, route)
 	upstream, err := g.buildUpstreamURL(binding, route, r)
 	if err != nil {
@@ -153,7 +161,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	outReq.URL = upstream
 	outReq.Host = bindingHost(binding)
 	outReq.ContentLength = r.ContentLength
-	copyRequestHeaders(outReq.Header, r.Header)
+	httpforward.CopyHeaders(outReq.Header, r.Header)
 	removeInternalHeaders(outReq.Header)
 	outReq.Header.Del("Authorization")
 	outReq.Header.Del(strings.ToLower(binding.AuthHeader))
@@ -169,41 +177,26 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
-	copyResponseHeaders(w.Header(), resp.Header)
+	httpforward.CopyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
-	flusher, _ := w.(http.Flusher)
 	// 跳转不跟随：网关只把上游的回答交回调用方，自身绝不再发一次带凭证的请求。
 	// 但跳转不是一次完成的交换，按非成功记账，避免审计把它当成功。
 	resultCode := ""
 	if isRedirect(resp.StatusCode) {
 		resultCode = codeUpstreamRedirect
 	}
-	buf := make([]byte, 32*1024)
-	for {
-		n, rerr := resp.Body.Read(buf)
-		if n > 0 {
-			if _, werr := w.Write(buf[:n]); werr != nil {
-				g.record(r.Context(), authz, binding, resp.StatusCode, codeClientWriteFailed, start)
-				return
-			}
-			if flusher != nil {
-				flusher.Flush()
-			}
-		}
-		if rerr == nil {
-			continue
-		}
-		if errors.Is(rerr, io.EOF) {
-			g.record(r.Context(), authz, binding, resp.StatusCode, resultCode, start)
-			return
-		}
-		// 非 EOF 的读取错误表示上游传输中断。截断的响应不能记成成功：先按失败
-		// 记账并留下日志，再中断连接，让调用方看到响应被截断而不是正常结束。
+	readErr, writeErr := httpforward.StreamBody(w, resp.Body)
+	if writeErr != nil {
+		g.record(r.Context(), authz, binding, resp.StatusCode, codeClientWriteFailed, start)
+		return
+	}
+	if readErr != nil {
 		log.Printf("gateway: upstream response interrupted: binding=%s host=%s status=%d err=%v",
-			binding.ID, bindingHost(binding), resp.StatusCode, rerr)
+			binding.ID, bindingHost(binding), resp.StatusCode, readErr)
 		g.record(r.Context(), authz, binding, resp.StatusCode, codeResponseInterrupted, start)
 		panic(http.ErrAbortHandler)
 	}
+	g.record(r.Context(), authz, binding, resp.StatusCode, resultCode, start)
 }
 
 // 网关审计里单独标记的未完成交换。它们都不是成功。
@@ -359,50 +352,13 @@ func sessionToken(r *http.Request) (secret.Value, error) {
 			}
 		}
 	}
-	// 工具把中介令牌放进它原生的 API Key 字段时也接受，例如 Gemini 的
-	// x-goog-api-key 或其它客户端的 x-api-key。
-	for _, name := range []string{"X-Api-Key", "X-Goog-Api-Key", "Api-Key"} {
+	// 通用 API 客户端可在原生 Key 头中提交会话令牌。
+	for _, name := range []string{"X-Api-Key", "Api-Key"} {
 		if v := r.Header.Get(name); strings.HasPrefix(v, "kks_") {
 			return secret.New(v), nil
 		}
 	}
 	return secret.Empty, model.NewError(model.CodeSessionInvalid, "missing intermediary session token")
-}
-
-var hopHeaders = []string{
-	"Connection", "Proxy-Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization",
-	"Te", "Trailer", "Transfer-Encoding", "Upgrade",
-}
-
-func copyRequestHeaders(dst, src http.Header) {
-	for k, vv := range src {
-		if isHopHeader(k) {
-			continue
-		}
-		for _, v := range vv {
-			dst.Add(k, v)
-		}
-	}
-}
-
-func copyResponseHeaders(dst, src http.Header) {
-	for k, vv := range src {
-		if isHopHeader(k) {
-			continue
-		}
-		for _, v := range vv {
-			dst.Add(k, v)
-		}
-	}
-}
-
-func isHopHeader(name string) bool {
-	for _, h := range hopHeaders {
-		if strings.EqualFold(name, h) {
-			return true
-		}
-	}
-	return false
 }
 
 func isUpgrade(r *http.Request) bool {
@@ -424,6 +380,7 @@ func removeInternalHeaders(h http.Header) {
 			h.Del(name)
 		}
 	}
+	// Preserve outbound stripping for the retired session header.
 	for _, name := range []string{"X-Api-Key", "X-Goog-Api-Key", "Api-Key", "Authorization"} {
 		h.Del(name)
 	}

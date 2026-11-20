@@ -228,7 +228,7 @@ func (c *Client) confirmLease(ctx context.Context, lease Lease) (broker.Permit, 
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != http.StatusOK {
-		return broker.Permit{}, &checkError{code: errorCode(data), message: APIError(data)}
+		return broker.Permit{}, &checkError{code: errorCode(data), message: APIError(data), status: resp.StatusCode}
 	}
 	var out struct {
 		Valid             bool       `json:"valid"`
@@ -268,6 +268,7 @@ func (c *Client) confirmLease(ctx context.Context, lease Lease) (broker.Permit, 
 
 // checkError 是中心确认返回的稳定错误码，用于区分可安全重新申请与真正撤销。
 type checkError struct {
+	status  int
 	code    string
 	message string
 }
@@ -320,6 +321,31 @@ func (c *Client) CheckUse(ctx context.Context, q broker.UseQuery) (broker.Permit
 	return permit, nil
 }
 
+// CheckExecution confirms the existing center permit without fetching a new one.
+func (c *Client) CheckExecution(ctx context.Context, permit broker.Permit) error {
+	if c.Mode == "short_term" {
+		return nil
+	}
+	current, err := c.confirmLease(ctx, Lease{
+		ID: permit.LeaseID, PrincipalID: permit.PrincipalID, BindingID: permit.BindingID,
+		CredentialID: permit.CredentialID, CredentialVersion: permit.CredentialVersion,
+		Mode: string(permit.Mode), ExpiresAt: permit.ExpiresAt,
+	})
+	if err != nil {
+		var denied *checkError
+		if errors.As(err, &denied) && denied.status >= 400 && denied.status < 500 && denied.status != http.StatusTooManyRequests {
+			return model.NewError(model.CodeUseNotAllowed, "central execution permit is no longer valid")
+		}
+		return err
+	}
+	if current.PrincipalID != permit.PrincipalID || current.BindingID != permit.BindingID ||
+		current.CredentialID != permit.CredentialID || current.Mode != permit.Mode ||
+		current.CredentialVersion != permit.CredentialVersion || !c.now().Before(current.ExpiresAt) {
+		return model.NewError(model.CodeUseNotAllowed, "central execution permit changed")
+	}
+	return nil
+}
+
 // retryableCheckCode 判断该错误码是否表示「许可需要重新签发」而不是撤销。
 func retryableCheckCode(code string) bool {
 	return code == codeLeaseStale || code == codeLeaseEpochStale
@@ -334,6 +360,7 @@ func (c *Client) permitFor(lease Lease) broker.Permit {
 		Mode:              model.DeliveryMode(lease.Mode),
 		CredentialVersion: lease.CredentialVersion,
 		LeaseID:           lease.ID,
+		ExpiresAt:         lease.ExpiresAt,
 	}
 	if remaining := lease.ExpiresAt.Sub(c.now()); remaining > 0 {
 		permit.MaxLeaseDuration = remaining

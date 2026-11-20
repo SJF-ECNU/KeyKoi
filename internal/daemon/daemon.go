@@ -285,7 +285,9 @@ func (d *Daemon) ipcRouter() http.Handler {
 	mux.HandleFunc("/v1/oauth/refresh", d.handleOAuthRefresh)
 	mux.HandleFunc("/v1/signatures", d.handleSignatures)
 	mux.HandleFunc("/v1/ssh-keys", d.handleSSHKeys)
-	mux.HandleFunc("/v1/ssh-sign-material", d.handleSSHSignMaterial)
+	mux.HandleFunc("/v1/ssh-sign", d.handleSSHSign)
+	mux.HandleFunc("/v1/tls-proxy/listen", d.handleTLSProxy)
+	mux.HandleFunc("/v1/db-proxy/listen", d.handleDBProxy)
 	return jsonMiddleware(mux)
 }
 

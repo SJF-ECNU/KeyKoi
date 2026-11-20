@@ -47,7 +47,7 @@ func (p *fakeProvider) ListKeys(context.Context) ([]KeyInfo, error) {
 	return out, nil
 }
 
-func (p *fakeProvider) ResolveMaterial(_ context.Context, bindingID string) (*Material, error) {
+func (p *fakeProvider) Sign(_ context.Context, bindingID string, data []byte, flags agent.SignatureFlags) (*ssh.Signature, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.resolveCalls++
@@ -65,7 +65,7 @@ func (p *fakeProvider) ResolveMaterial(_ context.Context, bindingID string) (*Ma
 		m.Passphrase = append([]byte(nil), pass...)
 		p.passOut = append(p.passOut, m.Passphrase)
 	}
-	return m, nil
+	return Sign(m, data, flags, nil)
 }
 
 func (p *fakeProvider) setInfos(infos ...KeyInfo) {

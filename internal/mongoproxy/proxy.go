@@ -27,7 +27,10 @@ package mongoproxy
 
 import (
 	"bufio"
+	"cmp"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -39,20 +42,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"keykoi/internal/ipcclient"
 	"keykoi/internal/model"
+	"keykoi/internal/osruntime"
+	"keykoi/internal/proxylease"
 	"keykoi/internal/secret"
 )
 
-// Broker 是代理访问后台运行面的最小接口。*ipcclient.Client 直接满足它。
-//
-// 目标与凭证来自同一次授权：代理不再列出 /v1/bindings；既有连接只用 Get
-// 读单条元数据核对改绑。
-type Broker interface {
-	Resolve(token, bindingID, mode string) (*ipcclient.Resolved, error)
-	// Get 读取单条绑定元数据，供既有连接核对改绑；它不返回凭证，也不建立许可。
-	Get(path string, out any) error
-}
+// Broker is the local authority used by the daemon-owned adapter.
+type Broker = proxylease.Authority
 
 // Config 配置代理。
 type Config struct {
@@ -64,6 +61,10 @@ type Config struct {
 	DatabaseField string
 	AuthTimeout   time.Duration
 	DialTimeout   time.Duration
+	// UpstreamCA appends a PEM bundle to the system trust store.
+	UpstreamCA string
+	// InsecureUpstream selects plaintext for a target without an explicit TLS scheme.
+	InsecureUpstream bool
 	// RevalidateInterval 是已认证连接核对绑定改绑的间隔：默认且最大 1 秒，
 	// 转发环按时间戳节流，最多每秒查一次；测试可调小以加速。
 	RevalidateInterval time.Duration
@@ -94,9 +95,9 @@ func (c *Config) normalize() error {
 	if c.DialTimeout <= 0 {
 		c.DialTimeout = 10 * time.Second
 	}
-	if c.RevalidateInterval <= 0 || c.RevalidateInterval > bindingCheckInterval {
+	if c.RevalidateInterval <= 0 || c.RevalidateInterval > proxylease.Interval {
 		// 超过 1 秒的配置会削弱“改绑后最多 1 秒内被发现”的保证，统一收紧到上限。
-		c.RevalidateInterval = bindingCheckInterval
+		c.RevalidateInterval = proxylease.Interval
 	}
 	if c.MaxConnections <= 0 {
 		c.MaxConnections = 64
@@ -109,6 +110,7 @@ type Server struct {
 	broker Broker
 	cfg    Config
 	logger *log.Logger
+	roots  *x509.CertPool
 
 	requestID atomic.Int32
 
@@ -140,6 +142,20 @@ func New(b Broker, cfg Config) (*Server, error) {
 	if err := cfg.normalize(); err != nil {
 		return nil, err
 	}
+	var roots *x509.CertPool
+	if cfg.UpstreamCA != "" {
+		pem, err := os.ReadFile(cfg.UpstreamCA)
+		if err != nil {
+			return nil, fmt.Errorf("read upstream CA file: %w", err)
+		}
+		roots, err = x509.SystemCertPool()
+		if err != nil || roots == nil {
+			roots = x509.NewCertPool()
+		}
+		if !roots.AppendCertsFromPEM(pem) {
+			return nil, errors.New("upstream CA file contains no usable certificate")
+		}
+	}
 	logger := cfg.Logger
 	if logger == nil {
 		logger = log.New(io.Discard, "", 0)
@@ -148,6 +164,7 @@ func New(b Broker, cfg Config) (*Server, error) {
 		broker: b,
 		cfg:    cfg,
 		logger: logger,
+		roots:  roots,
 		stop:   make(chan struct{}),
 		conns:  map[net.Conn]struct{}{},
 	}, nil
@@ -158,17 +175,7 @@ func (s *Server) Config() Config { return s.cfg }
 
 // Listen 绑定客户端监听地址。端口 0 时由系统分配，Addrs 给出实际地址。
 func (s *Server) Listen() error {
-	host, _, err := net.SplitHostPort(s.cfg.ListenAddr)
-	if err != nil {
-		return fmt.Errorf("mongoproxy: invalid listen address %q: %w", s.cfg.ListenAddr, err)
-	}
-	if host != "" && host != "localhost" {
-		ip := net.ParseIP(host)
-		if ip == nil || !ip.IsLoopback() {
-			return fmt.Errorf("mongoproxy: listen address %q must be a loopback address", s.cfg.ListenAddr)
-		}
-	}
-	ln, err := net.Listen("tcp", s.cfg.ListenAddr)
+	ln, err := osruntime.ListenLoopbackTCP(s.cfg.ListenAddr)
 	if err != nil {
 		return fmt.Errorf("mongoproxy: listen: %w", err)
 	}
@@ -247,7 +254,7 @@ func (s *Server) Serve(ctx context.Context) error {
 				s.wg.Add(1)
 				go func() {
 					defer s.wg.Done()
-					s.handle(c)
+					s.handle(ctx, c)
 				}()
 			}
 		}(ln)
@@ -336,7 +343,7 @@ func (s *Server) Stats() (active, total, denied int64) {
 }
 
 // handle 处理一条客户端连接。
-func (s *Server) handle(conn net.Conn) {
+func (s *Server) handle(ctx context.Context, conn net.Conn) {
 	s.total.Add(1)
 	remote := conn.RemoteAddr().String()
 	if s.active.Add(1) > int64(s.cfg.MaxConnections) {
@@ -408,23 +415,23 @@ func (s *Server) handle(conn net.Conn) {
 				s.replyAuthFailure(conn, msg.requestID, "the password field must carry a KeyKoi session token")
 				return
 			}
-			target, err := s.resolveTarget(token)
+			target, err := s.resolveTarget(ctx, token)
 			if err != nil {
 				s.denied.Add(1)
 				s.replyAuthFailure(conn, msg.requestID, "Authentication failed.")
 				s.logger.Printf("mongo-proxy connection from %s denied: %v", remote, err)
 				return
 			}
-			up, err = dialUpstream(target.Addr, s.cfg.DialTimeout)
-			if err == nil {
-				up.target = target
-			}
+			defer target.use.Finish()
+			defer target.use.Track(conn)()
+			up, err = s.dialUpstream(target)
 			if err != nil {
 				s.denied.Add(1)
 				s.replyAuthFailure(conn, msg.requestID, "Authentication failed.")
 				s.logger.Printf("mongo-proxy connection from %s failed: %v (upstream %s)", remote, err, target)
 				return
 			}
+			defer target.use.Track(up.conn)()
 			if err := up.authenticate(target); err != nil {
 				s.denied.Add(1)
 				s.replyAuthFailure(conn, msg.requestID, "Authentication failed.")
@@ -530,78 +537,52 @@ func helloReplyBody(upstream map[string]any, nowMS int64) []byte {
 }
 
 // resolveTarget 用一次授权换取目标与凭证：上游地址只从 resolved.Binding 取。
-func (s *Server) resolveTarget(token string) (UpstreamTarget, error) {
-	resolved, err := s.broker.Resolve(token, s.cfg.BindingID, string(model.ModeRuntimeDelivery))
-	if resolved != nil {
-		defer s.releaseLease(resolved)
-	}
+func (s *Server) resolveTarget(ctx context.Context, token string) (UpstreamTarget, error) {
+	sessionToken := secret.New(token)
+	resolved, err := proxylease.Authorize(ctx, s.broker, sessionToken, s.cfg.BindingID, s.cfg.AuthTimeout)
 	if err != nil {
-		return UpstreamTarget{}, denialForResolveError(err)
+		return UpstreamTarget{}, proxylease.Denial(err)
 	}
-	binding, err := authorizedBinding(resolved, s.cfg.BindingID)
+	use, err := proxylease.Begin(s.broker, sessionToken, resolved, s.cfg.RevalidateInterval)
 	if err != nil {
 		return UpstreamTarget{}, err
 	}
-	origin, err := binding.Origin()
+	accepted := false
+	defer func() {
+		if !accepted {
+			use.Finish()
+		}
+	}()
+	binding, err := proxylease.Binding(resolved, s.cfg.BindingID)
 	if err != nil {
-		return UpstreamTarget{}, errors.New("binding has an invalid upstream origin")
+		return UpstreamTarget{}, err
 	}
-	host := origin.Hostname()
-	port := origin.Port()
-	if port == "" {
-		port = "27017"
+	target, err := binding.DatabaseTarget(model.ProtocolMongo, "27017")
+	if err != nil {
+		return UpstreamTarget{}, err
 	}
-	if host == "" {
-		return UpstreamTarget{}, errors.New("binding has no upstream host")
-	}
-	userField := firstNonEmpty(s.cfg.UsernameField, binding.UsernameField, "username")
-	passField := firstNonEmpty(s.cfg.PasswordField, binding.PasswordField, "password")
-	user := resolved.Fields[userField]
-	password := resolved.Fields[passField]
-	if user == "" || password == "" {
+
+	userField := cmp.Or(s.cfg.UsernameField, binding.UsernameField, "username")
+	passField := cmp.Or(s.cfg.PasswordField, binding.PasswordField, "password")
+	user := resolved.Version.Fields[userField].RevealString()
+	password := resolved.Version.Fields[passField]
+	if user == "" || password.IsEmpty() {
 		return UpstreamTarget{}, fmt.Errorf("credential is missing fields %q/%q for the mongodb adapter", userField, passField)
 	}
-	authDB := resolved.Fields[s.cfg.DatabaseField]
+	authDB := resolved.Version.Fields[s.cfg.DatabaseField].RevealString()
 	if authDB == "" {
 		authDB = "admin"
 	}
+	accepted = true
 	return UpstreamTarget{
-		Addr:           net.JoinHostPort(host, port),
-		User:           user,
-		Password:       secret.New(password),
-		Database:       authDB,
-		Revision:       binding.Revision,
-		UpstreamOrigin: binding.UpstreamOrigin,
+		Addr:     target.Address(),
+		User:     user,
+		Password: password,
+		Database: authDB,
+		host:     target.Host,
+		tls:      target.TLS || !s.cfg.InsecureUpstream,
+		use:      use,
 	}, nil
-}
-
-// authorizedBinding 取出这次授权校验过的 Binding 快照；缺失或指向别的绑定都拒绝。
-func authorizedBinding(resolved *ipcclient.Resolved, bindingID string) (*model.Binding, error) {
-	if resolved == nil || resolved.Binding == nil {
-		return nil, errors.New("authorization returned no binding snapshot")
-	}
-	binding := resolved.Binding
-	if binding.ID != "" && binding.ID != bindingID {
-		return nil, errors.New("authorization returned a binding snapshot for another binding")
-	}
-	if binding.Status != "" && binding.Status != model.StatusActive {
-		return nil, errors.New("binding is " + string(binding.Status))
-	}
-	return binding, nil
-}
-
-// releaseLease 立即释放一次 Resolve 创建的许可；凭证与目标仍只使用同次返回的快照。
-func (s *Server) releaseLease(resolved *ipcclient.Resolved) {
-	if resolved == nil || resolved.Lease.ID == "" {
-		return
-	}
-	revoker, ok := s.broker.(interface{ RevokeLease(string) error })
-	if !ok {
-		return
-	}
-	if err := revoker.RevokeLease(resolved.Lease.ID); err != nil {
-		s.logger.Printf("mongo-proxy revoke lease: %v", err)
-	}
 }
 
 // relay 认证完成后按字节双向转发 OP_MSG。
@@ -609,7 +590,7 @@ func (s *Server) releaseLease(resolved *ipcclient.Resolved) {
 // 客户端→上游方向同时承担改绑核对：每一轮转发前后按时间戳判断是否到点，
 // 到点用 Get 读一次绑定详情（最多每秒一次），不另起后台 goroutine。
 func (s *Server) relay(conn net.Conn, clientReader *bufio.Reader, up *upstream) {
-	watch := s.newBindingWatch(up.target)
+	watch := up.target.use
 
 	done := make(chan struct{}, 2)
 	go func() {
@@ -636,13 +617,13 @@ func (s *Server) relay(conn net.Conn, clientReader *bufio.Reader, up *upstream) 
 //
 // 读截止时间只用来按时唤醒核对：空闲连接按 RevalidateInterval 超时一次，
 // 有数据时立即继续转发，字节流语义不变。
-func (s *Server) copyClientToUpstream(conn net.Conn, clientReader *bufio.Reader, up *upstream, watch *bindingWatch) {
+func (s *Server) copyClientToUpstream(conn net.Conn, clientReader *bufio.Reader, up *upstream, watch *proxylease.Use) {
 	buf := make([]byte, 32<<10)
 	for {
-		if watch.due(time.Now()) && watch.changed() {
+		if watch.Changed() {
 			return
 		}
-		if err := conn.SetReadDeadline(time.Now().Add(watch.interval)); err != nil {
+		if err := conn.SetReadDeadline(time.Now().Add(watch.Interval)); err != nil {
 			return
 		}
 		n, err := clientReader.Read(buf)
@@ -672,10 +653,9 @@ type UpstreamTarget struct {
 	User     string
 	Password secret.Value
 	Database string
-	// Revision 是同一次授权返回的 Binding revision，供在途连接检测改绑。
-	Revision int64
-	// UpstreamOrigin 是同一次授权返回的绑定 origin，用于发现改绑到别的目标。
-	UpstreamOrigin string
+	host     string
+	tls      bool
+	use      *proxylease.Use
 }
 
 // String 只输出非秘密字段。
@@ -693,17 +673,32 @@ type upstream struct {
 }
 
 // dialUpstream 建立上游连接并完成 hello 握手（不认证）。
-func dialUpstream(addr string, timeout time.Duration) (*upstream, error) {
-	d := &net.Dialer{Timeout: timeout, KeepAlive: 30 * time.Second}
-	conn, err := d.Dial("tcp", addr)
-	if err != nil {
-		return nil, fmt.Errorf("dial %s: %w", addr, err)
+func (s *Server) dialUpstream(target UpstreamTarget) (*upstream, error) {
+	d := &net.Dialer{Timeout: s.cfg.DialTimeout, KeepAlive: 30 * time.Second}
+	ctx := target.use.Context()
+	var conn net.Conn
+	var err error
+	if target.tls {
+		td := tls.Dialer{
+			NetDialer: d,
+			Config: &tls.Config{
+				MinVersion: tls.VersionTLS12,
+				ServerName: target.host,
+				RootCAs:    s.roots,
+			},
+		}
+		conn, err = td.DialContext(ctx, "tcp", target.Addr)
+	} else {
+		conn, err = d.DialContext(ctx, "tcp", target.Addr)
 	}
-	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+	if err != nil {
+		return nil, fmt.Errorf("dial %s: %w", target.Addr, err)
+	}
+	if err := conn.SetDeadline(time.Now().Add(s.cfg.DialTimeout)); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
-	u := &upstream{conn: conn, reader: bufio.NewReaderSize(conn, 32<<10)}
+	u := &upstream{conn: conn, reader: bufio.NewReaderSize(conn, 32<<10), target: target}
 	hello := newBson().
 		Int32("hello", 1).
 		String("$db", "admin").
@@ -820,32 +815,6 @@ func errmsgOf(doc map[string]any) string {
 		return s
 	}
 	return "unknown error"
-}
-
-func denialForResolveError(err error) error {
-	var apiErr *ipcclient.APIError
-	if errors.As(err, &apiErr) {
-		switch model.Code(apiErr.Code) {
-		case model.CodeSessionInvalid, model.CodeUseNotAllowed, model.CodeLeaseExpired:
-			return errors.New("session token is not authorized to use this binding")
-		case model.CodeBindingDisabled:
-			return errors.New("binding is not available")
-		case model.CodeVaultLocked:
-			return errors.New("keykoi vault is locked")
-		case model.CodeCredentialUnavailable:
-			return errors.New("credential is unavailable")
-		}
-	}
-	return errors.New("keykoid resolve failed")
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 func isClosedErr(err error) bool {

@@ -21,20 +21,18 @@ import (
 	"time"
 
 	"keykoi/internal/broker"
+	"keykoi/internal/httpforward"
 	"keykoi/internal/ipcclient"
 	"keykoi/internal/model"
 	"keykoi/internal/secret"
 	"keykoi/internal/store"
 )
 
-// Authorizer 是代理唯一的用钥授权来源。
-//
-// 代理不自行解锁密钥库、不自行判断锁定、逐次验证或中心策略：这些决定全部由授权来源
-// 在受信进程内做出。*broker.Broker 天然满足该接口（测试可直接注入内存 Broker），
-// 生产路径注入 remoteauth.Authorizer，让每次用钥都经本机 IPC 交给 keykoid。
+// Authorizer is the in-daemon authority for client sessions and per-request use.
 type Authorizer interface {
 	Authorize(ctx context.Context, req broker.Request) (*broker.Authorization, error)
-	RevokeLease(ctx context.Context, leaseID string) error
+	ReleaseLease(leaseID string)
+	SessionByToken(secret.Value) (model.Session, error)
 	Record(ctx context.Context, e store.AuditEvent)
 }
 
@@ -44,9 +42,6 @@ type Options struct {
 	// 用钥决定一律来自 Authorizer。
 	Authorizer Authorizer
 	Store      store.Store
-	// SessionToken 只在直接注入内存 Broker 时使用（测试）；经 keykoid 授权时
-	// 授权器自行建立代理会话，不再与主服务共享启动会话，此字段被忽略。
-	SessionToken secret.Value
 	// BindingIDs 限定本代理服务的登记 Binding；为空时允许全部 active Binding。
 	BindingIDs []string
 	// UpstreamRoots 是上游证书的信任池；nil 表示使用系统根。绝不跳过校验。
@@ -87,7 +82,6 @@ type Proxy struct {
 	ca         *CA
 	authorizer Authorizer
 	store      store.Store
-	token      secret.Value
 	allowed    map[string]bool
 	roots      *x509.CertPool
 	resolve    map[string]string
@@ -135,7 +129,6 @@ func New(opts Options) (*Proxy, error) {
 		ca:         ca,
 		authorizer: opts.Authorizer,
 		store:      opts.Store,
-		token:      opts.SessionToken,
 		allowed:    allowed,
 		roots:      opts.UpstreamRoots,
 		resolve:    opts.Resolve,
@@ -197,9 +190,24 @@ func (p *Proxy) Close() error {
 	return nil
 }
 
+func (p *Proxy) validSession(token secret.Value) bool {
+	_, err := p.authorizer.SessionByToken(token)
+	return err == nil
+}
+
 // ServeHTTP 只接受 CONNECT。未登记域名在 CONNECT 阶段拒绝，不建立隧道，
 // 也不发生任何凭证注入。
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// BasicAuth parses the standard Basic format, using the proxy header as its source.
+	auth := http.Request{Header: http.Header{"Authorization": r.Header.Values("Proxy-Authorization")}}
+	username, password, ok := auth.BasicAuth()
+	token := secret.New(password)
+	if !ok || username != "keykoi" || !p.validSession(token) {
+		p.stats.connectsRejected.Add(1)
+		w.Header().Set("Proxy-Authenticate", `Basic realm="KeyKoi"`)
+		writeProxyError(w, http.StatusProxyAuthRequired, "proxy_auth_required", "valid proxy credentials are required")
+		return
+	}
 	if r.Method != http.MethodConnect {
 		p.stats.connectsRejected.Add(1)
 		writeProxyError(w, http.StatusMethodNotAllowed, "method_not_allowed",
@@ -287,7 +295,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	p.stats.connectsAccepted.Add(1)
 	p.track(raw)
-	go p.serveTunnel(raw, brw.Reader, &tunnel{binding: binding, host: host, port: port})
+	go p.serveTunnel(raw, brw.Reader, &tunnel{binding: binding, host: host, port: port, token: token})
 }
 
 // tunnel 是同一条 CONNECT 连接的转发状态。
@@ -296,6 +304,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // 凭证版本的是当次授权返回的 authz.Binding 与 authz.Lease。这样「新凭证发往旧目标」
 // 不会发生：目标与版本来自同一次授权。
 type tunnel struct {
+	token   secret.Value
 	binding *model.Binding
 	host    string
 	port    string
@@ -362,9 +371,9 @@ func (p *Proxy) handleInner(w http.ResponseWriter, r *http.Request, tun *tunnel)
 	// 用钥决定交给授权来源：主库锁定、逐次验证与中心策略都在主服务内统一生效。
 	// 代理不再自建 Broker，也不复用主服务的启动会话。
 	authz, err := p.authorizer.Authorize(ctx, broker.Request{
-		Token:     p.token,
+		Token:     tun.token,
 		BindingID: tun.binding.ID,
-		Mode:      model.ModeRuntimeDelivery,
+		Mode:      model.ModeProxy,
 		Purpose:   "tls proxy target=" + tun.host,
 	})
 	if err != nil {
@@ -377,10 +386,13 @@ func (p *Proxy) handleInner(w http.ResponseWriter, r *http.Request, tun *tunnel)
 		p.rejectTunnel(w, statusForCode(code), string(code), strings.TrimPrefix(err.Error(), string(code)+": "))
 		return false
 	}
-	defer func() {
-		// 每个请求的许可只覆盖本次转发，避免长期驻留运行时许可。
-		_ = p.authorizer.RevokeLease(context.WithoutCancel(ctx), authz.Lease.ID)
-	}()
+	defer p.authorizer.ReleaseLease(authz.Lease.ID)
+	ctx, cancel := authz.ExecutionContext(ctx)
+	defer cancel()
+	controller := http.NewResponseController(w)
+	if controller.SetWriteDeadline(authz.Lease.UseLeaseExpiresAt) == nil {
+		defer controller.SetWriteDeadline(time.Time{})
+	}
 	if authz.Binding == nil {
 		p.rejectTunnel(w, http.StatusBadGateway, "PROXY_ERROR",
 			"the authorization did not return a binding snapshot")
@@ -444,7 +456,7 @@ func (p *Proxy) handleInner(w http.ResponseWriter, r *http.Request, tun *tunnel)
 	outReq.URL = upstream
 	outReq.Host = origin.Host
 	outReq.ContentLength = r.ContentLength
-	copyRequestHeaders(outReq.Header, r.Header)
+	httpforward.CopyHeaders(outReq.Header, r.Header)
 	removeClientCredentials(outReq.Header, headerName)
 	outReq.Header.Set(headerName, headerValue)
 	p.stats.requestsInjected.Add(1)
@@ -471,24 +483,16 @@ func (p *Proxy) handleInner(w http.ResponseWriter, r *http.Request, tun *tunnel)
 	defer resp.Body.Close()
 
 	p.stats.requestsForwarded.Add(1)
-	copyResponseHeaders(w.Header(), resp.Header)
+	httpforward.CopyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
-	flusher, _ := w.(http.Flusher)
-	buf := make([]byte, 32*1024)
-	for {
-		n, rerr := resp.Body.Read(buf)
-		if n > 0 {
-			if _, werr := w.Write(buf[:n]); werr != nil {
-				p.record(ctx, authz, binding, resp.StatusCode, "client_write_failed")
-				return true
-			}
-			if flusher != nil {
-				flusher.Flush()
-			}
-		}
-		if rerr != nil {
-			break
-		}
+	readErr, writeErr := httpforward.StreamBody(w, resp.Body)
+	if writeErr != nil {
+		p.record(ctx, authz, binding, resp.StatusCode, "client_write_failed")
+		return true
+	}
+	if readErr != nil {
+		p.record(ctx, authz, binding, resp.StatusCode, "upstream_response_interrupted")
+		panic(http.ErrAbortHandler)
 	}
 	p.record(ctx, authz, binding, resp.StatusCode, "")
 	return true
@@ -521,7 +525,11 @@ func (p *Proxy) bindingForHost(ctx context.Context, host string) (*model.Binding
 // verifyUpstream 在 CONNECT 阶段验证上游证书链与域名，失败即终止。
 func (p *Proxy) verifyUpstream(ctx context.Context, origin *url.URL) error {
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
-	raw, err := dialer.DialContext(ctx, "tcp", p.dialAddress(origin.Host))
+	port := origin.Port()
+	if port == "" {
+		port = "443"
+	}
+	raw, err := dialer.DialContext(ctx, "tcp", p.dialAddress(net.JoinHostPort(origin.Hostname(), port)))
 	if err != nil {
 		return &upstreamError{code: "upstream_unavailable", err: err}
 	}
@@ -740,42 +748,6 @@ func classifyTLSError(err error) string {
 		return "upstream_tls_invalid"
 	}
 	return "upstream_unavailable"
-}
-
-var hopHeaders = []string{
-	"Connection", "Proxy-Connection", "Keep-Alive", "Proxy-Authenticate", "Proxy-Authorization",
-	"Te", "Trailer", "Transfer-Encoding", "Upgrade",
-}
-
-func copyRequestHeaders(dst, src http.Header) {
-	for k, vv := range src {
-		if isHopHeader(k) {
-			continue
-		}
-		for _, v := range vv {
-			dst.Add(k, v)
-		}
-	}
-}
-
-func copyResponseHeaders(dst, src http.Header) {
-	for k, vv := range src {
-		if isHopHeader(k) {
-			continue
-		}
-		for _, v := range vv {
-			dst.Add(k, v)
-		}
-	}
-}
-
-func isHopHeader(name string) bool {
-	for _, h := range hopHeaders {
-		if strings.EqualFold(name, h) {
-			return true
-		}
-	}
-	return false
 }
 
 // removeClientCredentials 丢弃客户端自带认证头与中介控制头，再注入真实凭证。

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"keykoi/internal/proxylease"
 	"keykoi/internal/secret"
 )
 
@@ -23,10 +24,7 @@ type UpstreamTarget struct {
 	Password secret.Value
 	Database string
 	Addr     string
-	// Revision 是同一次授权返回的 Binding revision，供在途连接检测改绑。
-	Revision int64
-	// UpstreamOrigin 是同一次授权返回的绑定 origin，用于发现改绑到别的目标。
-	UpstreamOrigin string
+	use      *proxylease.Use
 }
 
 // String 只输出非秘密字段，避免密码进入日志。
@@ -103,7 +101,7 @@ type upstream struct {
 // （MySQL 的 SSLRequest 是握手的一部分）。
 func dialUpstream(target UpstreamTarget, opts upstreamOptions) (*upstream, error) {
 	d := &net.Dialer{Timeout: opts.timeout, KeepAlive: 30 * time.Second}
-	conn, err := d.Dial("tcp", target.Addr)
+	conn, err := d.DialContext(target.use.Context(), "tcp", target.Addr)
 	if err != nil {
 		return nil, &upstreamError{Err: fmt.Errorf("dial %s: %w", target.Addr, err)}
 	}

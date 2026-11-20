@@ -124,7 +124,7 @@ func TestProxyRelaysQueryAfterSCRAMUpstreamAuth(t *testing.T) {
 	up := newFakeUpstream(t, "scram")
 	b := newFakeBroker("bind_test_db")
 	b.setOrigin("http://" + up.Addr())
-	_, addr := startProxy(t, b, Config{})
+	_, addr := startProxy(t, b, Config{UpstreamTLS: TLSDisable})
 
 	conn, err := connect(t, addr, "keykoi", testToken, "keykoi_test")
 	if err != nil {
@@ -155,7 +155,7 @@ func TestProxyRejectsWrongSessionToken(t *testing.T) {
 	up := newFakeUpstream(t, "scram")
 	b := newFakeBroker("bind_test_db")
 	b.setOrigin("http://" + up.Addr())
-	_, addr := startProxy(t, b, Config{})
+	_, addr := startProxy(t, b, Config{UpstreamTLS: TLSDisable})
 
 	_, err := connect(t, addr, "keykoi", "kks_not_a_real_token", "keykoi_test")
 	if err == nil {
@@ -175,8 +175,8 @@ func TestProxyRejectsMissingRuntimeDeliveryGrant(t *testing.T) {
 	up := newFakeUpstream(t, "scram")
 	b := newFakeBroker("bind_test_db")
 	b.setOrigin("http://" + up.Addr())
-	b.denial = &ipcclient.APIError{Code: string(model.CodeUseNotAllowed), Message: "no runtime_delivery grant for binding bind_test_db"}
-	_, addr := startProxy(t, b, Config{})
+	b.denial = &ipcclient.APIError{Code: string(model.CodeUseNotAllowed), Message: "no proxy grant for binding bind_test_db"}
+	_, addr := startProxy(t, b, Config{UpstreamTLS: TLSDisable})
 
 	_, err := connect(t, addr, "keykoi", testToken, "keykoi_test")
 	if err == nil {
@@ -195,7 +195,7 @@ func TestProxyRejectsUnknownClientUser(t *testing.T) {
 	up := newFakeUpstream(t, "scram")
 	b := newFakeBroker("bind_test_db")
 	b.setOrigin("http://" + up.Addr())
-	_, addr := startProxy(t, b, Config{})
+	_, addr := startProxy(t, b, Config{UpstreamTLS: TLSDisable})
 
 	_, err := connect(t, addr, "postgres", testToken, "keykoi_test")
 	if err == nil {
@@ -226,7 +226,7 @@ func TestProxyRejectsCredentialWithoutDatabaseFields(t *testing.T) {
 	b := newFakeBroker("bind_test_db")
 	b.setOrigin("http://" + up.Addr())
 	delete(b.fields, "password")
-	_, addr := startProxy(t, b, Config{})
+	_, addr := startProxy(t, b, Config{UpstreamTLS: TLSDisable})
 
 	_, err := connect(t, addr, "keykoi", testToken, "keykoi_test")
 	if err == nil {
@@ -242,7 +242,7 @@ func TestProxyForwardsCancelRequest(t *testing.T) {
 	up := newFakeUpstream(t, "scram")
 	b := newFakeBroker("bind_test_db")
 	b.setOrigin("http://" + up.Addr())
-	_, addr := startProxy(t, b, Config{})
+	_, addr := startProxy(t, b, Config{UpstreamTLS: TLSDisable})
 
 	conn, err := connect(t, addr, "keykoi", testToken, "keykoi_test")
 	if err != nil {
@@ -284,7 +284,7 @@ func TestProxyClosesBothSidesOnClientDisconnect(t *testing.T) {
 	up := newFakeUpstream(t, "scram")
 	b := newFakeBroker("bind_test_db")
 	b.setOrigin("http://" + up.Addr())
-	srv, addr := startProxy(t, b, Config{})
+	srv, addr := startProxy(t, b, Config{UpstreamTLS: TLSDisable})
 
 	conn, err := connect(t, addr, "keykoi", testToken, "keykoi_test")
 	if err != nil {
@@ -315,7 +315,7 @@ func TestProxyConnectionLimit(t *testing.T) {
 	up := newFakeUpstream(t, "scram")
 	b := newFakeBroker("bind_test_db")
 	b.setOrigin("http://" + up.Addr())
-	_, addr := startProxy(t, b, Config{MaxConnections: 1})
+	_, addr := startProxy(t, b, Config{UpstreamTLS: TLSDisable, MaxConnections: 1})
 
 	first, err := connect(t, addr, "keykoi", testToken, "keykoi_test")
 	if err != nil {
@@ -335,7 +335,7 @@ func TestProxyConnectionLimit(t *testing.T) {
 
 func TestProxyDeclinesClientSideTLS(t *testing.T) {
 	b := newFakeBroker("bind_test_db")
-	_, addr := startProxy(t, b, Config{})
+	_, addr := startProxy(t, b, Config{UpstreamTLS: TLSDisable})
 
 	raw, err := net.Dial("tcp", addr)
 	if err != nil {
@@ -362,7 +362,7 @@ func TestProxyRejectsUnsupportedStartupVersion(t *testing.T) {
 	up := newFakeUpstream(t, "scram")
 	b := newFakeBroker("bind_test_db")
 	b.setOrigin("http://" + up.Addr())
-	_, addr := startProxy(t, b, Config{})
+	_, addr := startProxy(t, b, Config{UpstreamTLS: TLSDisable})
 
 	raw, err := net.Dial("tcp", addr)
 	if err != nil {
@@ -437,11 +437,11 @@ func TestProxyRequiresTLSWhenUpstreamDoesNotOfferIt(t *testing.T) {
 	up := newFakeUpstream(t, "scram")
 	b := newFakeBroker("bind_test_db")
 	b.setOrigin("http://" + up.Addr())
-	_, addr := startProxy(t, b, Config{UpstreamTLS: TLSRequire})
+	_, addr := startProxy(t, b, Config{})
 
 	_, err := connect(t, addr, "keykoi", testToken, "keykoi_test")
 	if err == nil {
-		t.Fatal("expected sslmode=require to fail against a plaintext upstream")
+		t.Fatal("expected default TLS policy to fail against a plaintext upstream")
 	}
 	var pgErr *pgconn.PgError
 	if !errors.As(err, &pgErr) || pgErr.Code != codeConnectionFailure {
@@ -493,9 +493,9 @@ func TestWarmUpCachesUpstreamAddressForCancel(t *testing.T) {
 	up := newFakeUpstream(t, "scram")
 	b := newFakeBroker("bind_test_db")
 	b.setOrigin("http://" + up.Addr())
-	srv, _ := startProxy(t, b, Config{})
+	srv, _ := startProxy(t, b, Config{UpstreamTLS: TLSDisable})
 
-	if err := srv.WarmUp(testToken); err != nil {
+	if err := srv.WarmUp(context.Background(), testToken); err != nil {
 		t.Fatalf("warm up: %v", err)
 	}
 	addr, ok := srv.cachedUpstreamAddr()
@@ -509,7 +509,7 @@ func TestProxyHandlesSSLRequestThenStartup(t *testing.T) {
 	up := newFakeUpstream(t, "scram")
 	b := newFakeBroker("bind_test_db")
 	b.setOrigin("http://" + up.Addr())
-	_, addr := startProxy(t, b, Config{})
+	_, addr := startProxy(t, b, Config{UpstreamTLS: TLSDisable})
 
 	connString := fmt.Sprintf("postgres://keykoi:%s@%s/keykoi_test?sslmode=prefer&connect_timeout=5", url.QueryEscape(testToken), addr)
 	cfg, err := pgconn.ParseConfig(connString)
@@ -539,7 +539,7 @@ func TestProxyUnixSocketListener(t *testing.T) {
 		t.Fatalf("temp dir: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	srv := startProxyWithConfig(t, b, Config{ListenSocket: filepath.Join(dir, ".s.PGSQL.55432")})
+	srv := startProxyWithConfig(t, b, Config{UpstreamTLS: TLSDisable, ListenSocket: filepath.Join(dir, ".s.PGSQL.55432")})
 	addrs := srv.Addrs()
 	if len(addrs) != 2 || addrs[1] != "unix:"+filepath.Join(dir, ".s.PGSQL.55432") {
 		t.Fatalf("unexpected listen addresses %v", addrs)
@@ -575,7 +575,7 @@ func TestProxyUsesAuthorizedBindingSnapshot(t *testing.T) {
 	b := newFakeBroker("bind_test_db")
 	b.setOrigin("http://" + legacy.Addr())
 	b.authorizeOrigin("http://" + authorized.Addr())
-	_, addr := startProxy(t, b, Config{})
+	_, addr := startProxy(t, b, Config{UpstreamTLS: TLSDisable})
 
 	conn, err := connect(t, addr, "keykoi", testToken, "keykoi_test")
 	if err != nil {
@@ -610,7 +610,7 @@ func TestResolveTargetFollowsBindingChange(t *testing.T) {
 	}
 
 	b.authorizeOrigin("http://127.0.0.1:15432")
-	first, err := srv.resolveTarget(testToken, "db_one")
+	first, err := srv.resolveTarget(context.Background(), testToken, "db_one")
 	if err != nil {
 		t.Fatalf("resolve before rebinding: %v", err)
 	}
@@ -619,7 +619,7 @@ func TestResolveTargetFollowsBindingChange(t *testing.T) {
 	}
 
 	b.authorizeOrigin("http://127.0.0.1:25432")
-	second, err := srv.resolveTarget(testToken, "db_two")
+	second, err := srv.resolveTarget(context.Background(), testToken, "db_two")
 	if err != nil {
 		t.Fatalf("resolve after rebinding: %v", err)
 	}
@@ -635,7 +635,7 @@ func TestProxyEndsConnectionWhenBindingRevisionChanges(t *testing.T) {
 	up := newFakeUpstream(t, "scram")
 	b := newFakeBroker("bind_test_db")
 	b.setOrigin("http://" + up.Addr())
-	_, addr := startProxy(t, b, Config{RevalidateInterval: 20 * time.Millisecond})
+	_, addr := startProxy(t, b, Config{UpstreamTLS: TLSDisable, RevalidateInterval: 20 * time.Millisecond})
 
 	conn, err := connect(t, addr, "keykoi", testToken, "keykoi_test")
 	if err != nil {
@@ -651,9 +651,17 @@ func TestProxyEndsConnectionWhenBindingRevisionChanges(t *testing.T) {
 		_, err := conn.Exec(ctx, "select 1").ReadAll()
 		return err != nil
 	})
-	// 旧连接不做第二次授权：许可只在建立时创建并已经释放。
-	if resolved, revoked := b.leaseCounts(); resolved != 1 || revoked != 1 {
-		t.Fatalf("existing connection re-authorized: resolved=%d revoked=%d", resolved, revoked)
+	// One authorization spans the whole connection and is finished after disconnect.
+	deadline := time.Now().Add(time.Second)
+	for {
+		resolved, finished := b.leaseCounts()
+		if resolved == 1 && finished == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected one completed execution, got resolved=%d finished=%d", resolved, finished)
+		}
+		time.Sleep(time.Millisecond)
 	}
 	b.mu.Lock()
 	getCalls := b.getCalls
@@ -668,7 +676,7 @@ func TestExistingConnectionEndsWhenBindingStatusChanges(t *testing.T) {
 	up := newFakeUpstream(t, "scram")
 	b := newFakeBroker("bind_test_db")
 	b.setOrigin("http://" + up.Addr())
-	_, addr := startProxy(t, b, Config{RevalidateInterval: 20 * time.Millisecond})
+	_, addr := startProxy(t, b, Config{UpstreamTLS: TLSDisable, RevalidateInterval: 20 * time.Millisecond})
 
 	conn, err := connect(t, addr, "keykoi", testToken, "keykoi_test")
 	if err != nil {
@@ -692,7 +700,7 @@ func TestExistingConnectionEndsWhenUpstreamOriginChanges(t *testing.T) {
 	newUpstream := newFakeUpstream(t, "scram")
 	b := newFakeBroker("bind_test_db")
 	b.setOrigin("http://" + oldUpstream.Addr())
-	_, addr := startProxy(t, b, Config{RevalidateInterval: 20 * time.Millisecond})
+	_, addr := startProxy(t, b, Config{UpstreamTLS: TLSDisable, RevalidateInterval: 20 * time.Millisecond})
 
 	conn, err := connect(t, addr, "keykoi", testToken, "keykoi_test")
 	if err != nil {
@@ -719,7 +727,7 @@ func TestBindingCheckFailureKeepsConnection(t *testing.T) {
 	up := newFakeUpstream(t, "scram")
 	b := newFakeBroker("bind_test_db")
 	b.setOrigin("http://" + up.Addr())
-	_, addr := startProxy(t, b, Config{RevalidateInterval: 20 * time.Millisecond})
+	_, addr := startProxy(t, b, Config{UpstreamTLS: TLSDisable, RevalidateInterval: 20 * time.Millisecond})
 
 	conn, err := connect(t, addr, "keykoi", testToken, "keykoi_test")
 	if err != nil {
@@ -757,7 +765,7 @@ func TestBindingCheckIsThrottledAndCoversIdleConnections(t *testing.T) {
 	up := newFakeUpstream(t, "scram")
 	b := newFakeBroker("bind_test_db")
 	b.setOrigin("http://" + up.Addr())
-	_, addr := startProxy(t, b, Config{RevalidateInterval: 100 * time.Millisecond})
+	_, addr := startProxy(t, b, Config{UpstreamTLS: TLSDisable, RevalidateInterval: 100 * time.Millisecond})
 
 	conn, err := connect(t, addr, "keykoi", testToken, "keykoi_test")
 	if err != nil {
@@ -788,7 +796,7 @@ func TestShutdownCancelsIdleConnections(t *testing.T) {
 	up := newFakeUpstream(t, "scram")
 	b := newFakeBroker("bind_test_db")
 	b.setOrigin("http://" + up.Addr())
-	srv, addr := startProxy(t, b, Config{})
+	srv, addr := startProxy(t, b, Config{UpstreamTLS: TLSDisable})
 
 	raw, err := net.DialTimeout("tcp", addr, 3*time.Second)
 	if err != nil {

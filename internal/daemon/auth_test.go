@@ -15,6 +15,7 @@ import (
 
 // fakeBackend 同时实现 Backend、BiometricVault 与 PasswordVerifier。
 type fakeBackend struct {
+	material     model.CredentialVersion
 	biometricErr error
 	password     string
 	verifyCalls  int
@@ -23,7 +24,7 @@ type fakeBackend struct {
 }
 
 func (f *fakeBackend) Materialize(context.Context, string, int) (model.CredentialVersion, error) {
-	return model.CredentialVersion{}, nil
+	return f.material, nil
 }
 func (f *fakeBackend) CreateCredential(_ context.Context, meta model.Credential, _ model.CredentialVersion) (*model.Credential, error) {
 	return &meta, nil

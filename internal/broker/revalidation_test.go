@@ -2,6 +2,8 @@ package broker_test
 
 import (
 	"context"
+	"io"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -137,6 +139,69 @@ func TestOnceVerificationScope(t *testing.T) {
 	}
 	if _, ok := auth2.Cache().TakeMatching("p1", "g1", string(model.ModeProxy), accept); ok {
 		t.Fatal("the one-time exchange must not be reusable")
+	}
+}
+
+func TestOnceVerificationTracksBindingRevision(t *testing.T) {
+	auth := broker.NewAuthenticator(nil, nil)
+	req := broker.VerifyRequest{
+		PrincipalID: "principal", SessionID: "session", GrantID: "grant",
+		Mode: model.ModeProxy, Policy: model.AuthPolicy{Kind: model.AuthOnce},
+		BindingRevision: 1, CredentialVersion: 1,
+	}
+	if _, err := auth.RecordVerification(req, "password"); err != nil {
+		t.Fatal(err)
+	}
+	if decision, err := auth.Require(context.Background(), req); err != nil || !decision.Cached {
+		t.Fatalf("expected verification reuse for the same binding revision, got %v", err)
+	}
+	req.BindingRevision++
+	if _, err := auth.Require(context.Background(), req); model.CodeOf(err) != model.CodeAuthUnavailable {
+		t.Fatalf("new binding revision must require verification, got %v", err)
+	}
+}
+
+func TestExecutionLeaseEndsOnRevocation(t *testing.T) {
+	cases := map[string]func(context.Context, *fixture, model.Session, model.UseLease){
+		"lock": func(ctx context.Context, f *fixture, _ model.Session, _ model.UseLease) {
+			f.br.Lock(ctx)
+		},
+		"session closed": func(ctx context.Context, f *fixture, session model.Session, _ model.UseLease) {
+			_ = f.br.CloseSession(ctx, session.ID)
+		},
+		"grant changed": func(ctx context.Context, f *fixture, _ model.Session, lease model.UseLease) {
+			f.br.InvalidateGrant(ctx, lease.GrantID, "revoked")
+		},
+	}
+	for name, revoke := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			t.Cleanup(func() { f.br.CloseAll(context.Background()) })
+			ctx := context.Background()
+			session, token, err := f.br.CreateSession(ctx, f.userID, "execution test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			authz, err := f.br.Authorize(ctx, broker.Request{Token: token, BindingID: f.binding, Mode: model.ModeProxy})
+			if err != nil {
+				t.Fatal(err)
+			}
+			execution, finish := authz.ExecutionContext(ctx)
+			defer finish()
+			left, right := net.Pipe()
+			defer right.Close()
+			defer left.Close()
+			stop := context.AfterFunc(execution, func() { _ = left.Close() })
+			defer stop()
+			revoke(ctx, f, session, authz.Lease)
+			_ = right.SetReadDeadline(time.Now().Add(time.Second))
+			if _, err := right.Read(make([]byte, 1)); err != io.EOF {
+				t.Fatalf("revoked execution did not close the connection: %v", err)
+			}
+			if err := f.br.CheckLease(ctx, token, authz.Lease); err == nil || f.br.ActiveLeaseCount() != 0 {
+				t.Fatalf("revoked execution still appears active: %v", err)
+			}
+		})
 	}
 }
 

@@ -62,6 +62,11 @@ func newUpstream(t *testing.T, scheme model.AuthScheme, expected string) *upstre
 		case model.AuthBasic:
 			matched = r.Header.Get("Authorization") == "Basic "+base64.StdEncoding.EncodeToString([]byte("tool:tool-pw"))
 		}
+		if r.URL.Path == "/partial" {
+			w.Header().Set("Content-Length", "20")
+			_, _ = io.WriteString(w, "partial")
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"matched":         matched,
@@ -99,10 +104,11 @@ type stack struct {
 	auth     *scriptedAuth
 	binding  *model.Binding
 	credID   string
+	token    string
 }
 
 // scriptedAuth 包装内存 Broker，用来模拟主服务返回的绑定快照、revision 与错误。
-// 生产路径注入的是 remoteauth.Authorizer；两者实现同一个 tlsproxy.Authorizer 接口。
+// 生产路径直接使用 daemon 内的 Broker。
 type scriptedAuth struct {
 	inner tlsproxy.Authorizer
 
@@ -152,8 +158,12 @@ func (s *scriptedAuth) Authorize(ctx context.Context, req broker.Request) (*brok
 	return authz, nil
 }
 
-func (s *scriptedAuth) RevokeLease(ctx context.Context, leaseID string) error {
-	return s.inner.RevokeLease(ctx, leaseID)
+func (s *scriptedAuth) ReleaseLease(leaseID string) {
+	s.inner.ReleaseLease(leaseID)
+}
+
+func (s *scriptedAuth) SessionByToken(token secret.Value) (model.Session, error) {
+	return s.inner.SessionByToken(token)
 }
 
 func (s *scriptedAuth) Record(ctx context.Context, e store.AuditEvent) {
@@ -226,7 +236,7 @@ func newStackWith(t *testing.T, opts stackOptions) *stack {
 		t.Fatal(err)
 	}
 	if err := st.PutGrant(ctx, &model.Grant{ID: "grant_tls_runtime", PrincipalID: principal.ID, BindingID: binding.ID,
-		DeliveryMode: model.ModeRuntimeDelivery, MaxLeaseDuration: 10 * time.Minute, Status: model.StatusActive}); err != nil {
+		DeliveryMode: model.ModeProxy, MaxLeaseDuration: 10 * time.Minute, Status: model.StatusActive}); err != nil {
 		t.Fatal(err)
 	}
 	br := broker.New(st, src, broker.Options{SessionTTL: time.Hour, MaxLeaseDuration: 10 * time.Minute})
@@ -245,7 +255,7 @@ func newStackWith(t *testing.T, opts stackOptions) *stack {
 	auth := &scriptedAuth{inner: br}
 	caDir := t.TempDir()
 	proxy, err := tlsproxy.New(tlsproxy.Options{
-		Authorizer: auth, Store: st, SessionToken: token,
+		Authorizer: auth, Store: st,
 		BindingIDs: []string{binding.ID}, UpstreamRoots: roots, CADir: caDir,
 		Logger: testLogger{t},
 	})
@@ -260,6 +270,7 @@ func newStackWith(t *testing.T, opts stackOptions) *stack {
 	if err != nil {
 		t.Fatal(err)
 	}
+	proxyURL.User = url.UserPassword("keykoi", token.RevealString())
 	client := &http.Client{
 		Timeout: 15 * time.Second,
 		Transport: &http.Transport{
@@ -272,12 +283,45 @@ func newStackWith(t *testing.T, opts stackOptions) *stack {
 		t.Fatal(err)
 	}
 	return &stack{proxy: proxy, server: server, client: client, upstream: up, caDir: caDir, secret: credentialValue,
-		auth: auth, binding: stored, credID: credID}
+		auth: auth, binding: stored, credID: credID, token: token.RevealString()}
 }
 
 type testLogger struct{ t *testing.T }
 
 func (l testLogger) Printf(format string, args ...any) { l.t.Logf(format, args...) }
+
+func TestConnectRequiresInstanceToken(t *testing.T) {
+	s := newStack(t, true)
+	target, err := url.Parse(s.upstream.server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, auth := range []string{"", "Basic " + base64.StdEncoding.EncodeToString([]byte("keykoi:wrong-token"))} {
+		req := httptest.NewRequest(http.MethodConnect, target.Host, nil)
+		req.Header.Set("Proxy-Authorization", auth)
+		res := httptest.NewRecorder()
+		s.proxy.ServeHTTP(res, req)
+		if res.Code != http.StatusProxyAuthRequired || res.Header().Get("Proxy-Authenticate") == "" {
+			t.Fatalf("CONNECT must ask for proxy authentication, got %d", res.Code)
+		}
+	}
+}
+
+func TestInterruptedUpstreamResponseIsAudited(t *testing.T) {
+	s := newStack(t, true)
+	resp, err := s.client.Get(s.upstream.server.URL + "/partial")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if _, err := io.ReadAll(resp.Body); err == nil {
+		t.Fatal("expected a read error for the interrupted response")
+	}
+	events := s.auth.recorded()
+	if len(events) == 0 || events[len(events)-1].ErrorCode != "upstream_response_interrupted" {
+		t.Fatalf("interrupted response must be audited as a failure: %+v", events)
+	}
+}
 
 func TestInjectsCredentialForRegisteredTarget(t *testing.T) {
 	s := newStack(t, true)
@@ -408,6 +452,7 @@ func TestUpstreamCertificateErrorTerminates(t *testing.T) {
 func TestClientThatDoesNotTrustProxyCAIsRecordedUnsupported(t *testing.T) {
 	s := newStack(t, true)
 	proxyURL, _ := url.Parse(s.server.URL)
+	proxyURL.User = url.UserPassword("keykoi", s.token)
 	untrusting := &http.Client{
 		Timeout:   15 * time.Second,
 		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},

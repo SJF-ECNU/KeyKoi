@@ -21,8 +21,10 @@ import (
 
 	"golang.org/x/crypto/pbkdf2"
 
+	"keykoi/internal/broker"
 	"keykoi/internal/ipcclient"
 	"keykoi/internal/model"
+	"keykoi/internal/secret"
 )
 
 // ---- BSON ----
@@ -352,11 +354,22 @@ func (b *testBroker) failGets(err error) {
 	b.getErr = err
 }
 
-func (b *testBroker) RevokeLease(leaseID string) error {
+func (b *testBroker) CheckLease(_ context.Context, _ secret.Value, lease model.UseLease) error {
+	var binding model.Binding
+	if err := b.Get("/v1/bindings/"+lease.BindingID, &binding); err != nil {
+		return err
+	}
+	if (binding.Status != "" && binding.Status != model.StatusActive) ||
+		binding.Revision != lease.BindingRevision || binding.UpstreamOrigin != lease.Target {
+		return model.NewError(model.CodeBindingDisabled, "binding changed")
+	}
+	return nil
+}
+
+func (b *testBroker) ReleaseLease(leaseID string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.revoked = append(b.revoked, leaseID)
-	return nil
 }
 
 func (b *testBroker) leaseCounts() (resolved, revoked int) {
@@ -365,7 +378,8 @@ func (b *testBroker) leaseCounts() (resolved, revoked int) {
 	return b.calls, len(b.revoked)
 }
 
-func (b *testBroker) Resolve(token, bindingID, mode string) (*ipcclient.Resolved, error) {
+func (b *testBroker) Authorize(_ context.Context, req broker.Request) (*broker.Authorization, error) {
+	token, mode := req.Token.RevealString(), string(req.Mode)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.calls++
@@ -375,19 +389,19 @@ func (b *testBroker) Resolve(token, bindingID, mode string) (*ipcclient.Resolved
 	if token != "kks_test_token" {
 		return nil, &ipcclient.APIError{Code: string(model.CodeSessionInvalid), Message: "invalid"}
 	}
-	if mode != string(model.ModeRuntimeDelivery) {
+	if mode != string(model.ModeProxy) {
 		return nil, &ipcclient.APIError{Code: string(model.CodeUseNotAllowed), Message: "mode"}
 	}
-	out := &ipcclient.Resolved{Fields: map[string]string{}}
+	out := &broker.Authorization{Version: model.CredentialVersion{Fields: map[string]secret.Value{}}}
 	for k, v := range b.fields {
-		out.Fields[k] = v
+		out.Version.Fields[k] = secret.New(v)
 	}
 	snapshot := b.binding
 	if b.authorized != nil {
 		snapshot = *b.authorized
 	}
 	out.Binding = &snapshot
-	out.Lease = model.UseLease{ID: fmt.Sprintf("lease-%d", b.calls), BindingRevision: snapshot.Revision}
+	out.Lease = model.UseLease{ID: fmt.Sprintf("lease-%d", b.calls), BindingRevision: snapshot.Revision, BindingID: snapshot.ID, Target: snapshot.UpstreamOrigin, UseLeaseExpiresAt: time.Now().Add(time.Minute)}
 	return out, nil
 }
 
@@ -533,6 +547,7 @@ func startMongoProxy(t *testing.T, broker *testBroker) (*Server, string) {
 		ListenAddr:         "127.0.0.1:0",
 		AuthTimeout:        5 * time.Second,
 		RevalidateInterval: broker.revalidateInterval,
+		InsecureUpstream:   true,
 		Logger:             log.New(io.Discard, "", 0),
 	})
 	if err != nil {
@@ -892,8 +907,16 @@ func TestProxyEndsConnectionWhenBindingRevisionChanges(t *testing.T) {
 		t.Fatal("the revised target was contacted on the old connection")
 	}
 	// 旧连接不做第二次授权：许可只在建立时创建并已经释放。
-	if resolved, revoked := broker.leaseCounts(); resolved != 1 || revoked != 1 {
-		t.Fatalf("existing connection re-authorized: resolved=%d revoked=%d", resolved, revoked)
+	deadline := time.Now().Add(time.Second)
+	for {
+		resolved, finished := broker.leaseCounts()
+		if resolved == 1 && finished == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected one completed execution, got resolved=%d finished=%d", resolved, finished)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 

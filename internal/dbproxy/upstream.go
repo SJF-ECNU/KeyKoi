@@ -17,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgproto3"
 
+	"keykoi/internal/proxylease"
 	"keykoi/internal/secret"
 )
 
@@ -35,11 +36,11 @@ const (
 // ParseTLSMode 解析 sslmode 取值。
 func ParseTLSMode(s string) (TLSMode, error) {
 	switch TLSMode(strings.ToLower(strings.TrimSpace(s))) {
-	case "", TLSDisable:
+	case TLSDisable:
 		return TLSDisable, nil
 	case TLSPrefer:
 		return TLSPrefer, nil
-	case TLSRequire:
+	case "", TLSRequire:
 		return TLSRequire, nil
 	}
 	return "", fmt.Errorf("dbproxy: unsupported upstream sslmode %q (disable|prefer|require)", s)
@@ -54,10 +55,7 @@ type UpstreamTarget struct {
 	Database string
 	// Addr 是 host:port，用于连接与取消请求转发。
 	Addr string
-	// Revision 是同一次授权返回的 Binding revision，供在途连接检测改绑。
-	Revision int64
-	// UpstreamOrigin 是同一次授权返回的绑定 origin，用于发现改绑到别的目标。
-	UpstreamOrigin string
+	use  *proxylease.Use
 }
 
 // String 只输出非秘密字段，避免密码进入日志。
@@ -146,7 +144,7 @@ func dialUpstreamWithDial(
 			conn = tlsConn
 			encrypted = true
 		case 'N':
-			if mode == TLSRequire {
+			if mode != TLSPrefer {
 				conn.Close()
 				return nil, &upstreamError{Err: errors.New("upstream does not offer TLS while sslmode=require")}
 			}

@@ -101,6 +101,16 @@ func bearerToken(r *http.Request) string {
 	return r.Header.Get("X-KeyKoi-Session")
 }
 
+// controlPrincipal returns an empty scope only for authenticated administrative requests.
+func (d *Daemon) controlPrincipal(r *http.Request) (string, error) {
+	if r.Header.Get("X-KeyKoi-Admin") != "" || bearerToken(r) != "" {
+		_, err := d.requireAdmin(r)
+		return "", err
+	}
+	subject, err := d.currentSubject(r)
+	return subject.ID, err
+}
+
 func decodeJSON(r *http.Request, v any) error {
 	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
 	dec.DisallowUnknownFields()
@@ -151,6 +161,15 @@ func (d *Daemon) handleSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Daemon) handleSessionClose(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	principal, err := d.controlPrincipal(r)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
 	var body struct {
 		SessionID string `json:"session_id"`
 	}
@@ -158,7 +177,7 @@ func (d *Daemon) handleSessionClose(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, err)
 		return
 	}
-	if err := d.broker.CloseSession(r.Context(), body.SessionID); err != nil {
+	if err := d.broker.CloseSessionForPrincipal(r.Context(), body.SessionID, principal); err != nil {
 		writeAPIError(w, err)
 		return
 	}
@@ -236,18 +255,24 @@ func (d *Daemon) handleUseLeases(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mode := model.DeliveryMode(body.Mode)
-	authz, err := d.broker.Authorize(r.Context(), brokerRequest(body.Token, body.BindingID, body.Route, mode, "lease metadata"))
+	lease, err := d.broker.AuthorizeMetadata(r.Context(), brokerRequest(body.Token, body.BindingID, body.Route, mode, "lease metadata"))
 	if err != nil {
 		writeAPIError(w, err)
 		return
 	}
-	// 只返回元数据：普通控制接口不返回真实值。这是一次查询，不是一次用钥：
-	// 立刻释放刚建立的许可，避免元数据接口把短期许可越攒越多。
-	d.broker.ReleaseLease(authz.Lease.ID)
-	writeJSON(w, http.StatusOK, map[string]any{"lease": authz.Lease})
+	writeJSON(w, http.StatusOK, map[string]any{"lease": lease})
 }
 
 func (d *Daemon) handleUseLeaseRevoke(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	principal, err := d.controlPrincipal(r)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
 	var body struct {
 		LeaseID string `json:"lease_id"`
 	}
@@ -255,7 +280,7 @@ func (d *Daemon) handleUseLeaseRevoke(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, err)
 		return
 	}
-	if err := d.broker.RevokeLease(r.Context(), body.LeaseID); err != nil {
+	if err := d.broker.RevokeLeaseForPrincipal(r.Context(), body.LeaseID, principal); err != nil {
 		writeAPIError(w, err)
 		return
 	}
@@ -447,7 +472,7 @@ func (d *Daemon) handleBindings(w http.ResponseWriter, r *http.Request) {
 		if b.Status == "" {
 			b.Status = model.StatusActive
 		}
-		if _, err := b.Origin(); err != nil {
+		if _, err := b.Target(); err != nil {
 			writeAPIError(w, model.NewError("", "%v", err))
 			return
 		}
@@ -578,7 +603,7 @@ func (d *Daemon) handleGrants(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, old := range superseded {
-			d.broker.ClearAuthForGrant(r.Context(), old.ID, "superseded")
+			d.broker.InvalidateGrant(r.Context(), old.ID, "superseded")
 			d.broker.Record(r.Context(), store.AuditEvent{
 				Mode: "control", Result: "grant_superseded", BindingID: body.BindingID,
 				Detail: "grant " + old.ID + " replaced by a new " + string(mode) + " grant",
@@ -612,7 +637,7 @@ func (d *Daemon) handleGrantItem(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// 撤销授权同时丢弃该授权的验证结果。
-		d.broker.ClearAuthForGrant(r.Context(), parts[0], "revoked")
+		d.broker.InvalidateGrant(r.Context(), parts[0], "revoked")
 		writeJSON(w, http.StatusOK, map[string]any{"id": parts[0], "status": model.StatusRevoked})
 	case "approve":
 		// approve 只服务恢复后待复核的授权。已撤销或被新授权取代的记录不能借此复活，
@@ -631,7 +656,7 @@ func (d *Daemon) handleGrantItem(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, grantApprovalError(parts[0], err))
 			return
 		}
-		d.broker.ClearAuthForGrant(r.Context(), parts[0], "approved")
+		d.broker.InvalidateGrant(r.Context(), parts[0], "approved")
 		writeJSON(w, http.StatusOK, map[string]any{"id": parts[0], "status": model.StatusActive})
 	default:
 		writeAPIError(w, model.NewError("", "unsupported grant operation"))
@@ -687,6 +712,14 @@ func (d *Daemon) handleUnlock(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Daemon) handleAudit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if _, err := d.requireAdmin(r); err != nil {
+		writeAPIError(w, err)
+		return
+	}
 	limit := 100
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
