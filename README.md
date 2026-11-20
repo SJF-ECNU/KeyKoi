@@ -1,37 +1,42 @@
-# 钥鲤 KeyKoi
+# KeyKoi
 
-![手绘锦鲤守着凭证保险库，经授权后连接终端、Git 和数据库工具。](docs/assets/keykoi-intro.webp)
+**English** · [简体中文](README.zh-CN.md)
 
-**把业务凭证收进本机加密保险库，让熟悉的工具按需使用。** KeyKoi 面向在同一台 Mac 上使用 Git、SSH、云 CLI、数据库客户端和 Agent 的开发者。你可以用命令行或本机控制台管理凭证、授权和使用记录。
+![A hand-drawn koi guards a credential vault connected to a terminal, Git, and databases.](docs/assets/keykoi-intro.webp)
 
-[快速开始](#快速开始) · [交给 Agent 部署与导入](docs/指南/Agent部署与凭证导入.md) · [使用指南](docs/索引/使用指南.md) · [验收记录](docs/验收/验收总览.md) · [MIT](LICENSE)
+**Keep service credentials in an encrypted vault on your Mac and let familiar tools use them on demand.** KeyKoi is for developers who use Git, SSH, cloud CLIs, database clients, and agents on the same machine. Manage credentials, grants, and usage records from the CLI or local console.
 
-## 复制这段，让你的 Agent 帮你部署
+[Quick start](#quick-start) · [Set up with your agent](docs/agent-setup.md) · [User guides (中文)](docs/索引/使用指南.md) · [Test results (中文)](docs/验收/验收总览.md) · [MIT](LICENSE)
 
-把下面这段发给能操作你本机终端的 Agent。也可以先看看[完整接入引导](docs/指南/Agent部署与凭证导入.md)。
+## Copy this to let your agent set up KeyKoi
+
+Send the following prompt to an agent that can operate your Mac's terminal. [Read the full agent setup guide](docs/agent-setup.md).
 
 ```text
-请帮我在这台 Mac 上部署 KeyKoi。先读取 https://github.com/SJF-ECNU/KeyKoi
-中的 docs/指南/Agent部署与凭证导入.md，检查本机已有的安装、凭证和工具配置。
+Help me set up KeyKoi on this Mac. Read the setup guide first:
+https://github.com/SJF-ECNU/KeyKoi/blob/main/docs/agent-setup.md
 
-按我实际使用的 Git、云 CLI、SSH、数据库或业务脚本逐项接入，尽量保留原来的命令。
-请先做可回退的备份。需要密码、私钥口令或 API Key 时，让我在本机终端隐藏输入。
-逐项验证后告诉我哪些工具已经可以照常使用、哪些还需要现场确认，以及怎么回退。
+Check my existing installation, credentials, and tool configuration. Connect
+the Git, cloud CLI, SSH, database, and script workflows I actually use, keeping
+my usual commands wherever possible. Back up any configuration you plan to
+change. Let me enter passwords, private-key passphrases, or API keys directly
+in my terminal without echoing them. Verify each workflow and tell me what
+works, what still needs my input, and how to roll back.
 ```
 
-## KeyKoi 怎么工作
+## How KeyKoi works
 
-导入凭证后，新建一个**绑定**，指定凭证用于哪个目标服务。再为某个用户或 Agent 设置**授权**，决定它可以怎样使用这个绑定，以及每次使用前是否需要验证。KeyKoi 后台执行授权并记录结果。
+Import a credential, then create a **binding** that identifies the destination. Add a **grant** for the user or agent that needs it. The grant controls how the credential can be used and when identity verification is required. The local KeyKoi service enforces the grant and records the outcome.
 
-| 用钥方式 | 工具收到什么 | 常见场景 |
+| Mode | What the tool gets | Typical uses |
 | --- | --- | --- |
-| 代理 `proxy` | 请求结果。KeyKoi 向上游认证 | HTTP、PostgreSQL、Redis、MySQL、MongoDB |
-| 签名 `sign` | 签名结果。私钥留在 KeyKoi 的执行路径 | SSH Agent、已适配的云请求签名 |
-| 运行时交付 `runtime_delivery` | 明确允许的凭证字段，由 KeyKoi 注入子进程 | GitHub CLI、阿里云 CLI 等依赖原生认证方式的工具 |
+| Proxy (`proxy`) | The response from a request KeyKoi authenticates upstream | HTTP, PostgreSQL, Redis, MySQL, MongoDB |
+| Signing (`sign`) | A signature generated inside KeyKoi | SSH agent and supported cloud request signing |
+| Runtime delivery (`runtime_delivery`) | Selected credential fields injected into a child process | GitHub CLI, Alibaba Cloud CLI, and tools with native authentication |
 
-## 快速开始
+## Quick start
 
-当前主要在 **macOS arm64** 上验收。从源码安装需要 **Go 1.26.11 或更新版本**。这套命令使用主密码启动，Touch ID 可以之后配置。
+KeyKoi is primarily tested on **macOS arm64**. Building from source requires **Go 1.26.11 or later**. These steps start with a master password. You can set up Touch ID later.
 
 ```bash
 git clone https://github.com/SJF-ECNU/KeyKoi.git
@@ -44,14 +49,14 @@ keykoi status
 keykoi ui
 ```
 
-安装脚本注册本机后台服务。首次运行 `keykoi init` 时，终端会提示输入主密码。已有保险库或服务重启后，用 `keykoi unlock` 解锁。控制台默认监听 `127.0.0.1:8378`。
+The installer registers the local background service. On first use, `keykoi init` prompts for a master password. For an existing vault or after a service restart, run `keykoi unlock`. The console listens on `127.0.0.1:8378` by default.
 
-### 试一次凭证交付
+### Try runtime delivery
 
-在自己的终端运行以下示例（需 Python 3）。第一条命令会隐藏输入，填入任意测试值即可。示例只为当前账户授权，且只允许交付 `token` 字段。
+Run this example in your own terminal with Python 3 available. Enter a dummy value at the first prompt. The grant applies to your local account and limits delivery to the `token` field.
 
 ```bash
-CREDENTIAL_ID="$(keykoi --json credential add --kind api_key --label '试用凭证' --field token)"
+CREDENTIAL_ID="$(keykoi --json credential add --kind api_key --label 'Demo credential' --field token)"
 keykoi binding add --id demo --route demo --credential "$CREDENTIAL_ID" \
   --origin https://example.com --scheme bearer --runtime-field token
 GRANT_ID="$(keykoi --json grant add --principal me --binding demo \
@@ -59,22 +64,22 @@ GRANT_ID="$(keykoi --json grant add --principal me --binding demo \
 keykoi auth verify --method password --grant "$GRANT_ID" --mode runtime_delivery
 
 keykoi run --binding demo --exe /bin/sh --env DEMO_TOKEN=field:token -- \
-  -c 'test -n "$DEMO_TOKEN" && printf "%s\n" "测试凭证已交付"'
+  -c 'test -n "$DEMO_TOKEN" && printf "%s\n" "Demo credential delivered"'
 keykoi grant revoke --id "$GRANT_ID"
 ```
 
-这个示例只检查测试凭证是否成功交付，无需访问网络或打印凭证。接入实际工具时可继续使用 `keykoi run`，也可按工具指南建立命令代理，保留原来的日常命令。[工具接入与排障](docs/指南/工具接入与排障.md)
+The example checks delivery locally and prints only the outcome. For everyday use, keep using `keykoi run` or set up a command shim to retain the original command. [Tool setup and troubleshooting (中文)](docs/指南/工具接入与排障.md)
 
-## 安全与恢复
+## Security and recovery
 
-- **存储与解锁**。凭证写入数据库前加密。解锁支持主密码，以及配置签名助手后的 Touch ID。主密码是保险库恢复所需的凭据。[Touch ID 部署与续签](docs/指南/生物识别助手续签与部署.md)
-- **授权与撤销**。授权按主体、绑定和用钥方式设置。锁库或撤销权限会停止后续用钥。运行时已经交给子进程的凭证仍需按上游规则撤销或轮换，目标程序必须可信。
-- **本机边界**。KeyKoi 能区分已登记的调用主体和授权路径。同一 macOS 账户下的进程仍共享系统用户权限。
-- **备份恢复**。`keykoi backup --out <文件>` 生成加密备份。恢复后保险库保持锁定，旧授权需要重新确认。换机或升级前同时保存主密码和备份。
+- **Storage and unlock.** KeyKoi encrypts credentials before writing them to the database. Unlock with a master password or set up the signed helper for Touch ID. Keep the master password for vault recovery. [Touch ID setup and renewal (中文)](docs/指南/生物识别助手续签与部署.md)
+- **Grants and revocation.** Grants apply to a principal, binding, and usage mode. Locking the vault or revoking a grant stops further use through KeyKoi. Rotate or revoke any credential already delivered to a child process at the upstream service. Use runtime delivery with trusted programs.
+- **Local boundary.** KeyKoi checks registered principals and grants. Processes running under the same macOS account still share the OS account's permissions.
+- **Backup and restore.** Use `keykoi backup --out PATH` to save an encrypted backup. A restored vault starts locked, and prior grants must be reviewed before use. Keep your master password and backup available before upgrading or moving to another Mac.
 
-## 项目状态与开发
+## Project status and development
 
-macOS 的单机保险库、控制台、Git/SSH、云 CLI 和数据库代理具备验收记录。测试覆盖范围随协议和工具版本而异。Linux 文件隔离、Windows 和多设备跨主机部署仍待完整验收。
+The local vault, console, Git and SSH workflows, cloud CLIs, and database proxies have macOS acceptance coverage. Coverage varies by protocol and tool version. Linux file isolation, Windows, and multi-host deployments still need full validation.
 
 ```bash
 go build ./...
@@ -82,8 +87,8 @@ go vet ./...
 go test ./...
 ```
 
-[项目文档](docs/首页.md) · [实施设计](KeyKoi_Implementation_Plan_v0.1.md) · [报告问题](https://github.com/SJF-ECNU/KeyKoi/issues)
+[Project docs (中文)](docs/首页.md) · [Implementation design (中文)](KeyKoi_Implementation_Plan_v0.1.md) · [Report an issue](https://github.com/SJF-ECNU/KeyKoi/issues)
 
-## 开源协议
+## License
 
-KeyKoi 使用 [MIT License](LICENSE)。第三方依赖保留各自的许可证。
+KeyKoi is available under the [MIT License](LICENSE). Third-party dependencies retain their respective licenses.

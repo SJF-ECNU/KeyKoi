@@ -6,6 +6,8 @@ updated_at: 2026-11-21
 
 # 让 Agent 帮你把常用工具接入 KeyKoi
 
+[English](../agent-setup.md) · **简体中文**
+
 把本文件交给能操作你本机终端的 Agent，再告诉它你平时用哪些工具、怎样调用。例如：
 
 > 请在这台 Mac 上部署 KeyKoi，把我现有的 Git、GitHub CLI、云 CLI、SSH 和数据库客户端按实际用途接好。尽量保留原命令和配置习惯。需要输入密码或按指纹时打开本机终端，逐个告诉我哪些工具已验证、哪些还有一步。
@@ -21,7 +23,7 @@ updated_at: 2026-11-21
 
 已安装时先定位实际二进制和数据目录，用 `keykoi status` 确认后台和锁定状态。需要解锁时打开终端运行 `keykoi unlock`。已有的签名助手继续沿用。
 
-首次安装按 README 的 macOS 和 Go 要求执行。初始化命令请在用户自己的终端运行。[安装要求与快速开始](../../README.md#快速开始)
+首次安装按 README 的 macOS 和 Go 要求执行。初始化命令请在用户自己的终端运行。[安装要求与快速开始](../../README.zh-CN.md#快速开始)
 
 ```bash
 git clone https://github.com/SJF-ECNU/KeyKoi.git
