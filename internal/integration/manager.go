@@ -515,15 +515,16 @@ func (m *Manager) Detach(ctx context.Context, id string) (*store.IntegrationReco
 		if err != nil {
 			return nil, err
 		}
+		if !m.managedValueUnchanged(doc, rec) {
+			return nil, model.NewError(model.CodeConfigDrift,
+				"[%s] %s in %s changed after attach; restore the value KeyKoi wrote before retrying detach",
+				rec.Section, rec.ManagedKey, rec.ConfigPath)
+		}
 		switch {
 		case rec.BackupPath == "":
-			// 没有恢复材料（例如历史记录或未启用数据目录）：只在当前值仍是
-			// KeyKoi 写入的值时移除，用户后续编辑一律保留。
-			if m.managedValueUnchanged(doc, rec) {
-				doc.removeValue(rec.Section, rec.ManagedKey)
-				if err := writeFileAtomic(rec.ConfigPath, []byte(doc.String())); err != nil {
-					return nil, err
-				}
+			doc.removeValue(rec.Section, rec.ManagedKey)
+			if err := writeFileAtomic(rec.ConfigPath, []byte(doc.String())); err != nil {
+				return nil, err
 			}
 		default:
 			snap, serr := m.readSnapshot(rec)

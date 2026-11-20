@@ -19,7 +19,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-command -v aliyun >/dev/null || { log "aliyun CLI is not installed (brew install aliyun-cli)"; exit 2; }
+# PATH may start with an already installed KeyKoi shim. Pin the real tool.
+if [ -z "${ALIYUN_BIN:-}" ] && command -v brew >/dev/null; then
+  ALIYUN_BIN="$(brew --prefix aliyun-cli)/bin/aliyun"
+fi
+case "${ALIYUN_BIN:-}" in /*) ;; *) log "Set ALIYUN_BIN to the absolute path of the real aliyun CLI"; exit 2 ;; esac
+[ -x "$ALIYUN_BIN" ] || { log "aliyun CLI is not executable at $ALIYUN_BIN"; exit 2; }
 
 cd "$ROOT"
 go build -o "$BIN/keykoi" ./cmd/keykoi
@@ -64,12 +69,12 @@ check() {
   else CHECKS+=("FAIL|$name|expected=$expected actual=$actual"); log "FAIL $name expected=$expected actual=$actual"; fi
 }
 
-ALIYUN_VERSION="$(aliyun version 2>&1 | head -1)"
+ALIYUN_VERSION="$("$ALIYUN_BIN" version)"
 log "aliyun version: $ALIYUN_VERSION"
 
 log "run real aliyun CLI with KeyKoi-injected environment"
 set +e
-"$BIN/keykoi" --json run --binding bind_aliyun --exe "$(command -v aliyun)" \
+"$BIN/keykoi" --json run --binding bind_aliyun --exe "$ALIYUN_BIN" \
   --env ALIBABA_CLOUD_ACCESS_KEY_ID=field:access_id \
   --env ALIBABA_CLOUD_ACCESS_KEY_SECRET=field:access_secret \
   --env ALIBABA_CLOUD_SECURITY_TOKEN=field:session_token \
@@ -88,7 +93,7 @@ STATS="$(curl -sS --cacert "$WORK/cert.pem" "$UP/stats")"
 stat() { printf '%s' "$STATS" | python3 -c "import json,sys;print(json.load(sys.stdin)[\"$1\"])"; }
 check "upstream saw AccessKeyId from KeyKoi (value matched)" "1" "$(stat query_matched)"
 check "upstream saw the request action" "DescribeRegions" "$(stat last_action)"
-check "aliyun signed the request with the delivered secret" "True" "$(stat signature_seen)"
+check "aliyun sent a signature field" "True" "$(stat signature_seen)"
 check "session token field delivered as SecurityToken" "True" "$(stat security_token_seen)"
 check "KeyKoi intermediary token never reached upstream" "0" "$(stat session_tokens)"
 

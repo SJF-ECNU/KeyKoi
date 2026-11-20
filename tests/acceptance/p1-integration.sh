@@ -122,6 +122,7 @@ check "integration verified" "verified" "$(printf '%s' "$STATUS" | python3 -c 'i
 check "no drift initially" "False" "$(printf '%s' "$STATUS" | python3 -c 'import json,sys; print(json.load(sys.stdin)["drift"])')"
 
 log "drift: user edits the managed field"
+ATTACHED_VALUE="$(grep '^credential_process = ' "$CFG")"
 python3 - "$CFG" <<'PY'
 import sys
 p = sys.argv[1]
@@ -154,7 +155,25 @@ check "verify refuses unverified tool version" "1" "$VERSION_EXIT"
 STATUS3="$("$BIN/keykoi" --json integration status --id aws-cli-helper)"
 check "unverified version keeps state unverified" "unverified" "$(printf '%s' "$STATUS3" | python3 -c 'import json,sys; print(json.load(sys.stdin)["integration"]["State"])')"
 
-log "detach restores pre-attach configuration"
+log "detach refuses drift and preserves the user's edit"
+cp "$CFG" "$WORK/user-config"
+set +e
+"$BIN/keykoi" --json integration detach --profile aws-cli-helper >"$WORK/detach.out" 2>"$WORK/detach.err"
+DETACH_EXIT=$?
+set -e
+check "detach fails on drift" "1" "$DETACH_EXIT"
+check "detach names drift and the affected setting" "yes" "$(grep -Fq 'CONFIG_DRIFT' "$WORK/detach.err" && grep -Fq '[profile keykoi] credential_process' "$WORK/detach.err" && echo yes || echo no)"
+check "detach preserves the user's edit" "yes" "$(cmp -s "$CFG" "$WORK/user-config" && echo yes || echo no)"
+
+log "detach restores pre-attach configuration after the managed value is restored"
+python3 - "$CFG" "$ATTACHED_VALUE" <<'PY'
+from pathlib import Path
+import sys
+
+config = Path(sys.argv[1])
+lines = config.read_text().splitlines(keepends=True)
+config.write_text("".join(sys.argv[2] + "\n" if line.startswith("credential_process = user-command #") else line for line in lines))
+PY
 "$BIN/keykoi" --json integration detach --profile aws-cli-helper >/dev/null
 check "managed field removed" "0" "$(grep -c 'credential_process' "$CFG" || true)"
 check "unrelated profile survives detach" "1" "$(grep -c 'region = eu-west-1' "$CFG" | tr -d ' ')"

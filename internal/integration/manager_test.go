@@ -516,16 +516,14 @@ func TestDriftDetectionAndDetach(t *testing.T) {
 	if rec.State != "unverified" {
 		t.Fatalf("drift must move state to unverified, got %s", rec.State)
 	}
-	// 撤销：只还原受管字段并删除记录。
-	if _, err := m.Detach(ctx, "test-adapter"); err != nil {
-		t.Fatal(err)
+	if _, err := m.Detach(ctx, "test-adapter"); model.CodeOf(err) != model.CodeConfigDrift {
+		t.Fatalf("detach should report configuration drift, got %v", err)
 	}
-	final := readFile(t, cfgPath)
-	if !strings.Contains(final, "region = eu-west-1") {
-		t.Fatalf("detach must preserve unrelated config: %s", final)
+	if got := readFile(t, cfgPath); got != modified {
+		t.Fatalf("detach changed the user's configuration: %s", got)
 	}
-	if _, err := st.GetIntegration(ctx, "test-adapter"); err == nil {
-		t.Fatal("integration record must be removed after detach")
+	if _, err := st.GetIntegration(ctx, "test-adapter"); err != nil {
+		t.Fatalf("integration record should remain available for recovery: %v", err)
 	}
 }
 

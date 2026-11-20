@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -155,7 +156,7 @@ func Install(cfg InstallConfig) (*Record, error) {
 		exeReal = cfg.Executable
 	}
 	if selfReal == exeReal {
-		return nil, fmt.Errorf("refusing to shim the keykoi binary itself (PATH ordering would recurse)")
+		return nil, fmt.Errorf("the tool path resolves to KeyKoi; use the original executable path from `keykoi shim list` or your tool installation")
 	}
 	if len(cfg.PrependArgs) > 0 && !strings.HasPrefix(cfg.PrependArgs[0], "-") {
 		return nil, fmt.Errorf("prepend args must start with a flag (got %q)", cfg.PrependArgs[0])
@@ -230,22 +231,9 @@ func MaybeRun() (bool, int) {
 	return true, code
 }
 
-// credentialFree 判断命令是否完全不需要凭证，可直接透传以保留离线可用性。
+// credentialFree only recognizes unambiguous standalone long options.
 func credentialFree(args []string) bool {
-	if len(args) == 0 {
-		return true
-	}
-	switch args[0] {
-	case "help", "--help", "-h", "version", "--version", "--help-all", "--help-search",
-		"auto-completion", "configure", "plugin", "mock", "upgrade":
-		return true
-	}
-	for _, a := range args {
-		if a == "--help" || a == "-h" || a == "--help-all" {
-			return true
-		}
-	}
-	return false
+	return len(args) == 1 && (args[0] == "--help" || args[0] == "--version")
 }
 
 // runPlain 不取凭证，直接执行原命令（仅用于帮助、版本等本地命令）。
@@ -293,7 +281,7 @@ func applyPrepend(rec *Record, args []string) ([]string, error) {
 }
 
 func runShim(rec *Record, args []string) int {
-	if credentialFree(args) {
+	if len(rec.PrependArgs) == 0 && credentialFree(args) {
 		return runPlain(rec, args)
 	}
 	socket := rec.Socket
@@ -327,6 +315,10 @@ func runManaged(ctx context.Context, rec *Record, args []string, resolver runner
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "alias %s: %v\n", rec.Name, err)
+		var op *net.OpError
+		if errors.As(err, &op) && op.Op == "dial" && op.Net == "unix" {
+			fmt.Fprintln(os.Stderr, "Run `keykoi status` to check the service. For local tool help, version or configuration, find the original executable path with `keykoi shim list` and call it directly.")
+		}
 		return 1
 	}
 	if res.Cancelled {

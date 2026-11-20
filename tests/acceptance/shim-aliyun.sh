@@ -21,7 +21,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-command -v aliyun >/dev/null || { log "aliyun CLI is not installed"; exit 2; }
+# PATH may start with an already installed KeyKoi shim. Pin the real tool.
+if [ -z "${ALIYUN_BIN:-}" ] && command -v brew >/dev/null; then
+  ALIYUN_BIN="$(brew --prefix aliyun-cli)/bin/aliyun"
+fi
+case "${ALIYUN_BIN:-}" in /*) ;; *) log "Set ALIYUN_BIN to the absolute path of the real aliyun CLI"; exit 2 ;; esac
+[ -x "$ALIYUN_BIN" ] || { log "aliyun CLI is not executable at $ALIYUN_BIN"; exit 2; }
+ln -s "$ALIYUN_BIN" "$BIN/aliyun"
+export PATH="$BIN:$PATH"
 
 cd "$ROOT"
 go build -o "$BIN/keykoi" ./cmd/keykoi
@@ -72,7 +79,16 @@ CRED2="$("$BIN/keykoi" --json credential add --kind access_key_pair --label "ali
 mkdir -p "$HOME_DIR/.aliyun"
 USER_AK="AKIDUSERCFG0000000000"
 cat > "$HOME_DIR/.aliyun/config.json" <<JSON
-{"current":"default","profiles":[{"name":"default","mode":"AK","access_key_id":"$USER_AK","access_key_secret":"userconfigsecret","region_id":"cn-beijing"}],"meta_path":"","plugins":[],"scopes":[]}
+{
+  "current": "default",
+  "profiles": [
+    {"name": "empty", "mode": "AK", "access_key_secret": ""},
+    {"name": "default", "mode": "AK", "access_key_id": "$USER_AK", "access_key_secret": "userconfigsecret", "region_id": "cn-beijing"}
+  ],
+  "meta_path": "",
+  "plugins": [],
+  "scopes": []
+}
 JSON
 
 CHECKS=()
@@ -83,13 +99,14 @@ check() {
 }
 
 log "install shim with PATH integration and config isolation"
-"$BIN/keykoi" --json shim install --name aliyun --exe "$(command -v aliyun)" --binding bind_aliyun \
+"$BIN/keykoi" --json shim install --name aliyun --exe "$ALIYUN_BIN" --binding bind_aliyun \
   --env ALIBABA_CLOUD_ACCESS_KEY_ID=field:access_id \
   --env ALIBABA_CLOUD_ACCESS_KEY_SECRET=field:access_secret \
   --env ALIBABA_CLOUD_SECURITY_TOKEN=field:session_token \
   --prepend-arg=--config-path --prepend-arg="$SHIM_DIR/aliyun.no-config.json" \
   --update-shell >"$WORK/install.out" 2>"$WORK/install.err"
 check "install warns about the existing plaintext profile" "yes" "$(grep -qi '仍保存明文访问密钥' "$WORK/install.err" && echo yes || echo no)"
+check "install warning points to the original executable" "yes" "$(grep -Fq "$ALIYUN_BIN" "$WORK/install.err" && echo yes || echo no)"
 
 check "shim symlink installed" "1" "$(test -L "$SHIM_DIR/aliyun" && echo 1 || echo 0)"
 check "shim record has no secret" "0" "$(grep -c "$SK" "$SHIM_DIR/aliyun.json" || true)"
@@ -112,7 +129,7 @@ check "upstream saw the injected AccessKeyId" "1" "$(stat query_matched)"
 check "user's plaintext config was bypassed, not used" "0" "$(printf '%s' "$STATS" | grep -c 'AKIDUSERCFG' | tr -d ' ')"
 check "user's config file itself was not modified" "yes" "$(grep -q "$USER_AK" "$HOME_DIR/.aliyun/config.json" && echo yes || echo no)"
 check "managed config path stays absent (no plaintext file created)" "1" "$(test ! -e "$SHIM_DIR/aliyun.no-config.json" && echo 1 || echo 0)"
-check "aliyun signed with the injected secret" "True" "$(stat signature_seen)"
+check "aliyun sent a signature field" "True" "$(stat signature_seen)"
 check "security token delivered" "True" "$(stat security_token_seen)"
 check "no intermediary token upstream" "0" "$(stat session_tokens)"
 
@@ -122,7 +139,7 @@ STATS2="$(curl -sS --cacert "$WORK/cert.pem" "https://127.0.0.1:$UP_PORT/stats")
 check "region argument reached the upstream request" "1" "$(printf '%s' "$STATS2" | grep -c 'RegionId=cn-shanghai' | tr -d ' ')"
 
 log "static AK/SK (no session token) works through a second shim"
-"$BIN/keykoi" --json shim install --name aliyun-static --exe "$(command -v aliyun)" --binding bind_aliyun_static \
+"$BIN/keykoi" --json shim install --name aliyun-static --exe "$ALIYUN_BIN" --binding bind_aliyun_static \
   --env ALIBABA_CLOUD_ACCESS_KEY_ID=field:access_id \
   --env ALIBABA_CLOUD_ACCESS_KEY_SECRET=field:access_secret \
   --prepend-arg=--config-path --prepend-arg="$SHIM_DIR/aliyun-static.no-config.json" >/dev/null
@@ -139,10 +156,6 @@ set -e
 check "explicit config path is refused" "1" "$(python3 -c "print(0 if $CONFLICT_EXIT==0 else 1)")"
 check "refusal explains the shim limitation" "yes" "$(grep -qi 'not supported through the shim' "$WORK/conflict.err" && echo yes || echo no)"
 
-log "configure commands stay native (no credential injection)"
-bash -c "source '$HOME_DIR/.zshrc'; aliyun configure list" >"$WORK/configure.out" 2>&1 || true
-check "configure list still reads the real (masked) profile" "yes" "$(grep -q 'default' "$WORK/configure.out" && grep -q 'cn-beijing' "$WORK/configure.out" && echo yes || echo no)"
-
 log "exit codes propagate"
 set +e
 bash -c "source '$HOME_DIR/.zshrc'; aliyun nonexistent-command" >/dev/null 2>&1
@@ -156,27 +169,35 @@ set +e
 SELF_EXIT=$?
 set -e
 check "refuses to shim a binary that resolves to itself" "1" "$(python3 -c "print(0 if $SELF_EXIT==0 else 1)")"
+check "reinstall diagnosis suggests finding the original executable" "yes" "$(grep -Fq 'keykoi shim list' "$WORK/self.out" && echo yes || echo no)"
 
 log "daemon unavailable: local commands still work, credential calls fail clearly"
 kill "$KEYKOID_PID" 2>/dev/null || true
 wait "$KEYKOID_PID" 2>/dev/null || true
+KEYKOID_PID=""
+NATIVE_ALIYUN="$("$BIN/keykoi" --json shim list | python3 -c 'import json,sys; print(next(r["executable"] for r in json.load(sys.stdin) if r["name"] == "aliyun"))')"
+check "shim list finds the original executable offline" "$ALIYUN_BIN" "$NATIVE_ALIYUN"
 set +e
-bash -c "source '$HOME_DIR/.zshrc'; aliyun version" >"$WORK/ver.out" 2>&1
+"$NATIVE_ALIYUN" version >"$WORK/ver.out" 2>&1
 VER_EXIT=$?
-bash -c "source '$HOME_DIR/.zshrc'; aliyun ecs DescribeRegions --region cn-hangzhou" >"$WORK/down.out" 2>"$WORK/down.err"
+"$NATIVE_ALIYUN" configure list >"$WORK/configure.out" 2>&1
+CONFIG_EXIT=$?
+bash -c "source '$HOME_DIR/.zshrc'; aliyun ecs DescribeRegions --endpoint 127.0.0.1:$UP_PORT --region cn-hangzhou --skip-secure-verify" >"$WORK/down.out" 2>"$WORK/down.err"
 DOWN_EXIT=$?
 set -e
-check "local commands work offline (no credential needed)" "0" "$VER_EXIT"
+check "original CLI version works offline" "0" "$VER_EXIT"
+check "original CLI configure list works offline" "0" "$CONFIG_EXIT"
+check "original CLI reads the local profile" "yes" "$(grep -q 'default' "$WORK/configure.out" && grep -q 'cn-beijing' "$WORK/configure.out" && echo yes || echo no)"
 check "credential calls fail when keykoid is down" "1" "$(python3 -c "print(0 if $DOWN_EXIT==0 else 1)")"
-check "failure names the daemon problem" "yes" "$(grep -qi 'keykoid\|alias aliyun' "$WORK/down.err" && echo yes || echo no)"
+check "failure offers daemon and local-tool diagnostics" "yes" "$(grep -Fq 'keykoi status' "$WORK/down.err" && grep -Fq 'keykoi shim list' "$WORK/down.err" && echo yes || echo no)"
 
 log "remove shim restores the original command resolution"
 "$BIN/keykoi" shim remove --name aliyun --update-shell >/dev/null
 check "shim symlink removed" "1" "$(test ! -e "$SHIM_DIR/aliyun" && echo 1 || echo 0)"
 check "PATH block removed from shell rc" "0" "$(grep -c '# >>> keykoi shim >>>' "$HOME_DIR/.zshrc" || true)"
-check "aliyun resolves to the real tool again" "$(command -v aliyun)" "$(bash -c "source '$HOME_DIR/.zshrc'; command -v aliyun")"
+check "aliyun resolves to the real tool again" "$BIN/aliyun" "$(bash -c "source '$HOME_DIR/.zshrc'; command -v aliyun")"
 
-python3 - "$OUT_DIR/result.json" "$(aliyun version 2>&1 | head -1)" "${CHECKS[@]}" <<'PY'
+python3 - "$OUT_DIR/result.json" "$(cat "$WORK/ver.out")" "${CHECKS[@]}" <<'PY'
 import json, sys
 out = {
   "phase": "shim-aliyun",

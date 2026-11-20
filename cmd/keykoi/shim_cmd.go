@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -149,8 +150,7 @@ func (f *sliceFlag) Set(v string) error {
 	return nil
 }
 
-// warnPlaintextToolConfig 提示工具自带配置里仍存在明文凭证的情况。
-// shim 通过隔离参数绕开它，但旧文件本身仍应清理。
+// warnPlaintextToolConfig 提示用户检查旧配置与 shim 的隔离参数。
 func warnPlaintextToolConfig(rec *shim.Record) {
 	base := filepath.Base(rec.Executable)
 	if base != "aliyun" {
@@ -165,8 +165,19 @@ func warnPlaintextToolConfig(rec *shim.Record) {
 	if err != nil {
 		return
 	}
-	if strings.Contains(string(data), `"access_key_secret":"`) && !strings.Contains(string(data), `"access_key_secret":""`) {
-		fmt.Fprintf(os.Stderr, "warning: %s 仍保存明文访问密钥；shim 会通过 --config-path 隔离它，建议用 `aliyun configure delete --profile <name>` 或删除该条目。\n", path)
+	var config struct {
+		Profiles []struct {
+			AccessKeySecret string `json:"access_key_secret"`
+		} `json:"profiles"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return
+	}
+	for _, profile := range config.Profiles {
+		if profile.AccessKeySecret != "" {
+			fmt.Fprintf(os.Stderr, "warning: %s 仍保存明文访问密钥。请用原始工具 %s 查看旧配置，并确认 shim 用 --config-path 指向独立且不存在的配置文件。\n", path, rec.Executable)
+			return
+		}
 	}
 }
 
