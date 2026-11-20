@@ -244,6 +244,13 @@ func (a *Authenticator) Require(ctx context.Context, req VerifyRequest) (AuthDec
 		return decision, nil
 	}
 	if entry, ok := a.cache.TakeMatching(req.PrincipalID, req.GrantID, string(req.Mode), func(e AuthEntry) bool {
+		// 凭证版本或绑定改版后，旧验证结果不再适用于新状态。
+		if e.CredentialVersion != 0 && req.CredentialVersion != 0 && e.CredentialVersion != req.CredentialVersion {
+			return false
+		}
+		if e.BindingRevision != 0 && req.BindingRevision != 0 && e.BindingRevision != req.BindingRevision {
+			return false
+		}
 		// once 只在其产生它的会话内复用；没有会话的预验证是一次性交换，
 		// 只能被消费一次，不会变成跨会话通配。
 		if policy.Kind == model.AuthOnce {
@@ -251,13 +258,6 @@ func (a *Authenticator) Require(ctx context.Context, req VerifyRequest) (AuthDec
 				return e.OneShot
 			}
 			return req.SessionID != "" && e.SessionID == req.SessionID
-		}
-		// 凭证版本或绑定改版后，旧验证结果不再适用于新状态。
-		if e.CredentialVersion != 0 && req.CredentialVersion != 0 && e.CredentialVersion != req.CredentialVersion {
-			return false
-		}
-		if e.BindingRevision != 0 && req.BindingRevision != 0 && e.BindingRevision != req.BindingRevision {
-			return false
 		}
 		return true
 	}); ok {

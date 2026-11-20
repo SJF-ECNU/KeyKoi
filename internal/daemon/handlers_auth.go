@@ -292,6 +292,18 @@ func (d *Daemon) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 		authReq.PrincipalID = grant.PrincipalID
 		authReq.BindingID = grant.BindingID
 		authReq.Policy = grant.AuthPolicy()
+		binding, err := d.store.GetBinding(r.Context(), grant.BindingID)
+		if err != nil {
+			writeAPIError(w, err)
+			return
+		}
+		cred, err := d.store.GetCredential(r.Context(), binding.CredentialID)
+		if err != nil {
+			writeAPIError(w, err)
+			return
+		}
+		authReq.BindingRevision = binding.Revision
+		authReq.CredentialVersion = cred.CurrentVersion
 	}
 	decision := broker.AuthDecision{Policy: authReq.Policy.String(), Method: method}
 	switch method {
