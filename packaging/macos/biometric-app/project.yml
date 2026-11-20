@@ -1,0 +1,42 @@
+# xcodegen 的可选替代描述文件：装了 xcodegen 的机器可以 `xcodegen generate`，
+# 结果应与 Tools/generate-xcodeproj.py 生成的工程等价。本机没有 xcodegen，
+# 因此权威来源是 generate-xcodeproj.py，这个文件只是给后续维护者的对照。
+name: KeyKoiBiometric
+options:
+  bundleIdPrefix: com.keykoi
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    DEVELOPMENT_TEAM: 977QNJU6V6
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.0"
+    SDKROOT: macosx
+targets:
+  KeyKoiBiometric:
+    type: application
+    platform: macOS
+    sources:
+      - path: ../keykoi-biometric.swift
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleExecutable: keykoi-biometric
+        CFBundleName: KeyKoi Biometric
+        CFBundlePackageType: APPL
+        LSUIElement: true
+        LSMinimumSystemVersion: "13.0"
+    entitlements:
+      path: App/KeyKoiBiometric.entitlements
+      properties:
+        keychain-access-groups:
+          - $(AppIdentifierPrefix)com.keykoi.biometric
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.keykoi.biometric
+        PRODUCT_NAME: KeyKoi Biometric
+        EXECUTABLE_NAME: keykoi-biometric
+        ENABLE_HARDENED_RUNTIME: YES
+        ENABLE_APP_SANDBOX: NO
+        GENERATE_INFOPLIST_FILE: NO

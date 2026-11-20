@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- 生物识别 ACL 只对具备钥匙串访问组的签名二进制开放。
+       $(AppIdentifierPrefix) 由 Xcode 在签名时用描述文件里的团队前缀替换；
+       访问组必须与描述文件授权的组一致，否则 AMFI 会拒绝启动。 -->
+  <key>keychain-access-groups</key>
+  <array>
+    <string>$(AppIdentifierPrefix)com.keykoi.biometric</string>
+  </array>
+</dict>
+</plist>

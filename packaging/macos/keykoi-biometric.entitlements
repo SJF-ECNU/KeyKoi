@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- 生物识别 ACL 需要钥匙串访问组；把 TEAMID 换成签名身份的团队前缀
+       （security find-identity -v -p codesigning 的证书组织单位）。 -->
+  <key>keychain-access-groups</key>
+  <array>
+    <string>TEAMID.com.keykoi.biometric</string>
+  </array>
+</dict>
+</plist>
