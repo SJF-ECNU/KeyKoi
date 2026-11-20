@@ -1,0 +1,875 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KeyKoi · 本机控制台</title>
+<style>
+:root {
+  color-scheme:light;
+  --canvas:#eff3ef; --paper:#fbfdfb; --ink:#152720; --soft:#51645a; --line:#d5ded6;
+  --wash:#e7efe7; --green:#17604b; --green-deep:#12382c; --lime:#d9f79c;
+  --red:#aa3327; --red-bg:#fff1ed; --pill:#ddeddf; --side:#102e25; --side-text:#d4e5d7;
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC",sans-serif;
+}
+* { box-sizing:border-box; }
+[hidden] { display:none !important; }
+body { margin:0; background:var(--canvas); color:var(--ink); font-size:14px; line-height:1.55; }
+button,input,select,textarea { font:inherit; }
+input,select,textarea,button { border-radius:8px; }
+button { min-height:42px; padding:8px 15px; border:1px solid transparent; font-weight:650; color:#fff; background:var(--green); cursor:pointer; white-space:nowrap; }
+button:hover:not(:disabled) { filter:brightness(.91); }
+button.secondary { background:var(--paper); border-color:var(--line); color:var(--ink); }
+button.subtle { background:none; border-color:transparent; color:var(--green); }
+button.danger { background:var(--red); }
+button:disabled { opacity:.48; cursor:default; }
+:focus-visible { outline:3px solid #6a9a50; outline-offset:2px; }
+h1,h2,h3,p { margin:0; }
+h1,h2,h3 { letter-spacing:-.035em; }
+h1 { font-size:clamp(30px,4vw,44px); line-height:1.15; }
+h2 { font-size:21px; line-height:1.25; }
+small,.muted { color:var(--soft); }
+small { font-size:12px; }
+.brand { display:flex; align-items:center; gap:12px; color:inherit; text-decoration:none; font-size:24px; font-weight:800; letter-spacing:-.045em; }
+.mark { position:relative; display:grid; place-items:center; flex:none; width:34px; height:34px; border-radius:10px; color:var(--side); background:var(--lime); font-size:23px; line-height:1; }
+.mark::before { content:""; width:14px; height:14px; border:2px solid currentColor; border-radius:60% 45% 60% 45%; transform:rotate(-25deg); }
+.mark::after { content:""; position:absolute; width:4px; height:4px; border-radius:50%; background:currentColor; top:12px; left:15px; }
+.shell { min-height:100vh; display:grid; grid-template-columns:212px minmax(0,1fr); }
+aside { position:sticky; top:0; height:100dvh; padding:28px 17px 20px; background:var(--side); color:var(--side-text); display:flex; flex-direction:column; gap:34px; }
+aside .brand { padding:0 8px; color:#f2fcf1; }
+nav { display:grid; gap:5px; }
+nav button { display:flex; align-items:center; gap:11px; width:100%; text-align:left; background:transparent; color:var(--side-text); border-color:transparent; font-weight:550; min-height:44px; }
+nav button:hover:not(:disabled) { background:#234538; filter:none; }
+nav button[aria-current="page"] { color:#122d23; background:var(--lime); font-weight:750; }
+.nav-icon { display:grid; place-items:center; width:20px; font-size:18px; line-height:1; }
+.side-foot { margin-top:auto; padding:13px 9px 0; border-top:1px solid #355448; color:#bbd1c1; font-size:12px; }
+.workspace { min-width:0; }
+.topbar { min-width:0; min-height:65px; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px clamp(18px,4vw,52px); border-bottom:1px solid var(--line); background:var(--canvas); }
+.topbar .secondary { min-height:36px; background:transparent; padding:6px 11px; }
+.status { display:inline-flex; gap:8px; align-items:center; font-weight:670; font-size:13px; white-space:nowrap; }
+.status::before { content:""; width:7px; height:7px; border-radius:50%; background:#8a6b3c; }
+.status[data-ready="true"]::before { background:#318663; }
+.page { max-width:1440px; margin:0 auto; padding:30px clamp(18px,4vw,52px) 64px; min-width:0; }
+.page-head { display:flex; align-items:flex-end; justify-content:space-between; gap:14px; margin:0 0 24px; }
+.page-head p { margin-top:7px; color:var(--soft); }
+.actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+.panel { border:1px solid var(--line); border-radius:14px; background:var(--paper); min-width:0; overflow:hidden; }
+.panel + .panel { margin-top:16px; }
+.panel-head { padding:17px 20px; display:flex; justify-content:space-between; align-items:center; gap:10px; border-bottom:1px solid var(--line); }
+.panel-head p,.panel-head small { display:block; margin-top:4px; }
+.metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); margin-bottom:17px; background:var(--green-deep); color:#f2fff0; border-radius:14px; overflow:hidden; }
+.metric { min-width:0; padding:17px 20px 18px; }
+.metric + .metric { border-left:1px solid #456459; }
+.metric span { display:block; color:#d0e1d5; font-size:13px; }
+.metric strong { display:block; margin-top:4px; font-size:34px; line-height:1.12; letter-spacing:-.05em; font-weight:700; font-variant-numeric:tabular-nums; }
+.setup { padding:18px 20px; display:flex; justify-content:space-between; align-items:center; gap:14px; margin-bottom:17px; background:#e5efd8; border:1px solid #c6d7b1; border-radius:13px; }
+.setup p { margin-top:4px; color:#41533e; }
+.filters { padding:14px 20px; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)) auto; gap:10px; align-items:end; border-bottom:1px solid var(--line); }
+.field { display:grid; align-content:start; gap:6px; min-width:0; }
+.field > span { font-weight:630; color:var(--soft); font-size:12px; }
+input:not([type=checkbox]),select,textarea { color:var(--ink); background:var(--paper); border:1px solid #b9c8bd; width:100%; min-width:0; min-height:42px; padding:8px 11px; }
+select { text-overflow:ellipsis; }
+textarea { resize:vertical; }
+.table-wrap { overflow:auto; max-width:100%; }
+table { width:100%; border-collapse:collapse; min-width:620px; text-align:left; font-variant-numeric:tabular-nums; }
+.activity-table { min-width:805px; }
+th,td { padding:11px 16px; vertical-align:middle; overflow-wrap:anywhere; }
+th { background:var(--wash); color:var(--soft); font-weight:700; font-size:12px; white-space:nowrap; }
+td { border-top:1px solid var(--line); }
+td:first-child,th:first-child { padding-left:20px; }
+td:last-child,th:last-child { padding-right:20px; }
+td .actions { flex-wrap:nowrap; justify-content:flex-end; }
+details > summary { cursor:pointer; color:var(--green); font-weight:650; }
+details[open] > :not(summary) { margin-top:12px; }
+td button { min-height:32px; padding:4px 9px; font-size:12px; }
+.table-primary { font-weight:650; }
+.table-detail { display:block; font-size:11px; color:var(--soft); }
+.time { white-space:nowrap; color:var(--soft); }
+.pill { display:inline-block; border-radius:50px; background:var(--wash); color:var(--ink); padding:2px 8px; white-space:nowrap; font-size:12px; font-weight:650; }
+.pill.good { background:var(--pill); color:#185341; }
+.pill.bad { background:var(--red-bg); color:var(--red); }
+.empty { padding:32px 20px; text-align:center; color:var(--soft); }
+.empty strong { display:block; color:var(--ink); font-size:15px; margin-bottom:3px; }
+.feedback { border:1px solid var(--line); margin:0 0 15px; padding:9px 13px; border-radius:8px; background:var(--paper); overflow-wrap:anywhere; }
+.feedback[data-error="true"],.form-error { background:var(--red-bg); color:var(--red); border-color:#ebbfb2; }
+.panel-body { padding:17px 20px; }
+.settings-layout { display:grid; gap:16px; }
+.settings-layout .panel { margin:0; }
+.settings-layout dl { display:grid; grid-template-columns:max-content minmax(0,1fr); gap:8px 20px; margin:0; }
+.settings-layout dt { color:var(--soft); }
+.settings-layout dd { margin:0; overflow-wrap:anywhere; }
+.inline-note { color:var(--soft); font-size:13px; }
+.login-screen { display:grid; min-height:100dvh; grid-template-columns:minmax(260px, .85fr) minmax(0,1fr); background:var(--paper); }
+.login-brand { min-height:100%; background:var(--side); color:#eff8eb; padding:clamp(24px,6vw,80px); display:flex; flex-direction:column; justify-content:space-between; }
+.login-brand h2 { margin-top:28px; font-size:clamp(32px,6vw,67px); color:var(--lime); line-height:1.08; }
+.login-card { width:min(100% - 40px,420px); margin:auto; padding:28px 0; display:grid; gap:17px; }
+.login-card form { display:grid; gap:14px; }
+.login-card code { font-size:12px; overflow-wrap:anywhere; }
+dialog { width:min(calc(100% - 28px),570px); max-height:calc(100dvh - 32px); border:1px solid var(--line); border-radius:16px; padding:0; background:var(--paper); color:var(--ink); }
+dialog::backdrop { background:rgba(10,29,24,.58); }
+.dialog-head,.dialog-actions { padding:16px 22px; display:flex; gap:9px; align-items:center; justify-content:space-between; }
+.dialog-head { border-bottom:1px solid var(--line); }
+.dialog-actions { border-top:1px solid var(--line); justify-content:flex-end; }
+.dialog-body { display:grid; gap:13px; padding:19px 22px; min-width:0; }
+.form-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:13px; }
+.form-error { margin:0 22px 14px; padding:9px 11px; border-radius:7px; overflow-wrap:anywhere; }
+.checkbox { display:flex; align-items:flex-start; gap:7px; font-size:13px; }
+.preview { white-space:pre-wrap; overflow-wrap:anywhere; margin:0; color:var(--soft); background:var(--wash); border-radius:7px; padding:10px; }
+@media (max-width:840px) {
+  .shell { grid-template-columns:minmax(0,1fr); }
+  aside { position:static; height:auto; padding:12px 16px 10px; gap:10px; }
+  nav { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:4px; }
+  nav button { justify-content:center; padding:6px 2px; min-height:38px; font-size:13px; }
+  .nav-icon,.side-foot { display:none; }
+  .page { padding-top:23px; }
+}
+@media (max-width:520px) {
+  .page-head,.setup { align-items:flex-start; flex-direction:column; }
+  .page-head { margin-bottom:17px; }
+  .metric { padding:12px 10px; }
+  .metric span { font-size:11px; }
+  .metric strong { font-size:27px; }
+  .filters { grid-template-columns:repeat(2,minmax(0,1fr)); padding:12px; }
+  .filters button { width:100%; }
+  .panel-head,.panel-body,.setup { padding:14px; }
+  .table-wrap table { min-width:0; display:block; }
+  .table-wrap thead { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+  .table-wrap tbody { display:block; }
+  .table-wrap tr { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px 14px; padding:14px; }
+  .table-wrap tr + tr { border-top:1px solid var(--line); }
+  .table-wrap td,.table-wrap td:first-child,.table-wrap td:last-child { display:block; border:0; padding:0; white-space:normal; }
+  .table-wrap td:not(.empty)::before { content:attr(data-label); display:block; margin-bottom:2px; font-size:11px; color:var(--soft); font-weight:650; }
+  .table-wrap .empty { grid-column:1 / -1; padding:9px 0; }
+  .table-wrap td .actions { justify-content:flex-start; flex-wrap:wrap; }
+  .login-screen { grid-template-columns:1fr; grid-template-rows:auto 1fr; }
+  .login-brand { padding:24px; }
+  .login-brand h2 { margin-top:18px; font-size:35px; }
+  .form-grid { grid-template-columns:minmax(0,1fr); }
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme:dark; --canvas:#15231e; --paper:#1b2c25; --ink:#e8f4eb; --soft:#b3c8ba; --line:#3c5548;
+    --wash:#263e34; --green:#8ad1ad; --green-deep:#153e2e; --side:#10291f; --side-text:#daebdf;
+    --red:#ffac9d; --red-bg:#482a25; --pill:#294e3e;
+  }
+  button { color:#142f24; }
+  button.danger { color:#362018; }
+  .pill.good { color:#ade2bb; }
+  .setup { background:#293f2d; border-color:#61795a; }
+  .setup p { color:#cee0c7; }
+  input:not([type=checkbox]),select,textarea { border-color:#547063; }
+}
+</style>
+</head>
+<body>
+<section id="login" class="login-screen">
+  <div class="login-brand">
+    <div class="brand"><span class="mark" aria-hidden="true"></span>KeyKoi</div>
+    <h2>本机<br>凭证控制台</h2>
+  </div>
+  <div class="login-card">
+    <h1>连接本机服务</h1>
+    <form id="login-form">
+      <label class="field"><span>管理令牌</span><input id="token" type="password" required autocomplete="off"></label>
+      <button id="connect">打开控制台</button>
+      <p id="login-error" class="feedback" data-error="true" role="alert" hidden></p>
+    </form>
+    <p class="muted">也可在终端运行 <code>keykoi ui</code> 一键连接。</p>
+  </div>
+</section>
+<div id="console" class="shell" hidden>
+  <aside>
+    <div class="brand"><span class="mark" aria-hidden="true"></span>KeyKoi</div>
+    <nav aria-label="控制台">
+      <button data-view="activity" aria-current="page"><span class="nav-icon" aria-hidden="true">▤</span>使用记录</button>
+      <button data-view="vault"><span class="nav-icon" aria-hidden="true">◇</span>密钥库</button>
+      <button data-view="access"><span class="nav-icon" aria-hidden="true">⊞</span>访问授权</button>
+      <button data-view="settings"><span class="nav-icon" aria-hidden="true">⚙</span>设置</button>
+    </nav>
+    <div class="side-foot">本机控制台 · macOS</div>
+  </aside>
+  <main class="workspace">
+    <div class="topbar"><span id="state" class="status">正在连接</span><button class="secondary" id="vault-action" hidden></button></div>
+    <div class="page">
+      <div id="feedback" class="feedback" role="status" hidden></div>
+      <section id="setup" class="setup" hidden>
+        <div><h2 id="setup-title"></h2><p id="setup-note"></p></div><button id="setup-action"></button>
+      </section>
+      <section id="activity-panel">
+        <header class="page-head"><div><h1>使用记录</h1><p id="activity-window">查看凭证的使用与验证结果。</p></div><button class="secondary" id="activity-refresh">刷新记录</button></header>
+        <div class="metrics">
+          <div class="metric"><span>显示记录</span><strong id="count-records">0</strong></div>
+          <div class="metric"><span>授权放行</span><strong id="count-allowed">0</strong></div>
+          <div class="metric"><span>授权拒绝</span><strong id="count-denied">0</strong></div>
+        </div>
+        <div class="panel">
+          <div class="filters">
+            <label class="field"><span>主体</span><select id="activity-subject"><option value="">全部主体</option></select></label>
+            <label class="field"><span>用钥方式</span><select id="activity-mode"><option value="">全部方式</option><option value="proxy">代理</option><option value="runtime_delivery">运行时交付</option><option value="sign">签名</option></select></label>
+            <label class="field"><span>结果</span><select id="activity-result"><option value="">全部结果</option><option value="allowed">授权放行</option><option value="denied">授权拒绝</option><option value="upstream">上游响应</option><option value="error">上游错误</option></select></label>
+            <button class="secondary" id="activity-clear">清除筛选</button>
+          </div>
+          <div class="table-wrap" tabindex="0" aria-label="用钥记录">
+            <table class="activity-table" role="table"><thead role="rowgroup"><tr role="row"><th scope="col">时间</th><th scope="col">主体</th><th scope="col">凭证绑定</th><th scope="col">用钥方式</th><th scope="col">验证</th><th scope="col">结果</th><th scope="col">耗时</th></tr></thead><tbody role="rowgroup" id="activity-rows"></tbody></table>
+          </div>
+        </div>
+      </section>
+
+      <section id="vault-panel" hidden>
+        <header class="page-head"><div><h1>密钥库</h1><p>导入凭证，并指定它可以发往哪个服务。</p></div><button id="add-credential">导入凭证</button></header>
+        <section class="panel">
+          <header class="panel-head"><h2>凭证</h2><small id="credential-count"></small></header>
+          <div class="table-wrap" tabindex="0" aria-label="凭证"><table role="table"><thead role="rowgroup"><tr role="row"><th scope="col">名称</th><th scope="col">类型</th><th scope="col">版本</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead><tbody role="rowgroup" id="creds"></tbody></table></div>
+        </section>
+        <section class="panel">
+          <header class="panel-head"><div><h2>凭证绑定</h2><small>绑定决定用哪个凭证连接哪个地址。</small></div><button class="secondary" id="add-binding">新建绑定</button></header>
+          <div class="table-wrap" tabindex="0" aria-label="凭证绑定"><table role="table"><thead role="rowgroup"><tr role="row"><th scope="col">绑定</th><th scope="col">凭证</th><th scope="col">目标服务</th><th scope="col">认证</th><th scope="col">操作</th></tr></thead><tbody role="rowgroup" id="bindings"></tbody></table></div>
+        </section>
+      </section>
+
+      <section id="access-panel" hidden>
+        <header class="page-head"><div><h1>访问授权</h1><p>指定账户或 Agent 可以使用的绑定与验证方式。</p></div><div class="actions"><button class="secondary" id="register-agent">登记 Agent</button><button id="add-grant">新建授权</button></div></header>
+        <div class="panel">
+          <div class="table-wrap" tabindex="0" aria-label="授权"><table role="table"><thead role="rowgroup"><tr role="row"><th scope="col">主体</th><th scope="col">凭证绑定</th><th scope="col">用钥方式</th><th scope="col">验证策略</th><th scope="col">最近验证</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead><tbody role="rowgroup" id="grants"></tbody></table></div>
+        </div>
+      </section>
+
+      <section id="settings-panel" hidden>
+        <header class="page-head"><div><h1>设置</h1><p>管理本机服务、解锁与工具接入。</p></div><button class="secondary" id="refresh">刷新状态</button></header>
+        <div class="settings-layout">
+          <section class="panel">
+            <header class="panel-head"><h2>密钥库与验证</h2></header>
+            <div class="panel-body">
+              <dl><dt>服务状态</dt><dd id="service-status">—</dd><dt>代理网关</dt><dd id="gateway-address">—</dd><dt>Touch ID</dt><dd id="biometric-note">—</dd></dl>
+              <div class="actions" style="margin-top:14px">
+                <button class="secondary" id="unlock" hidden>主密码解锁</button>
+                <button class="secondary" id="unlock-biometric" hidden>Touch ID 解锁</button>
+                <button class="secondary" id="enroll-biometric" hidden>登记 Touch ID</button>
+                <button class="secondary" id="lock" hidden>锁定</button>
+                <button class="secondary" id="backup">密文备份</button>
+                <button class="secondary" id="restore">恢复备份</button>
+              </div>
+            </div>
+          </section>
+          <section class="panel">
+            <header class="panel-head"><h2>工具接入</h2><button class="secondary" id="add-integration">预览接入</button></header>
+            <div class="table-wrap" tabindex="0" aria-label="工具接入"><table role="table"><thead role="rowgroup"><tr role="row"><th scope="col">接入</th><th scope="col">状态</th><th scope="col">工具版本</th><th scope="col">已验证</th><th scope="col">操作</th></tr></thead><tbody role="rowgroup" id="integrations"></tbody></table></div>
+          </section>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+<dialog id="editor" aria-labelledby="dialog-title">
+  <form id="editor-form">
+    <header class="dialog-head"><h2 id="dialog-title"></h2><button class="subtle" type="button" id="close-dialog" aria-label="关闭">×</button></header>
+    <div class="dialog-body" id="dialog-body"></div>
+    <p class="form-error" id="dialog-error" role="alert" hidden></p>
+    <footer class="dialog-actions"><button class="secondary" type="button" id="cancel-dialog">取消</button><button id="save-dialog"></button></footer>
+  </form>
+</dialog>
+<script>
+const $ = id => document.getElementById(id);
+const state = {token:"", status:null, biometric:null, credentials:[], bindings:[], subjects:[], grants:[], integrations:[], events:[]};
+const modes = [["proxy","代理"],["runtime_delivery","运行时交付"],["sign","签名"]];
+const modesByKey = Object.fromEntries(modes);
+const statuses = {active:"有效", revoked:"已撤销", pending_review:"待复核", disabled:"已停用", verified:"已验证", attached:"已接入", active_verified:"已验证", detached:"已撤销"};
+const authMethods = {biometric:"Touch ID", password:"主密码", none:"未验证"};
+const authResults = {verified:"已验证", reused:"复用验证", not_required:"无需验证", failed:"验证失败", unavailable:"验证不可用"};
+const schemes = [["bearer","Bearer"],["api_key","API Key 请求头"],["basic","Basic"],["oauth_client_credentials","OAuth 应用凭证"],["oauth_jwt_bearer","OAuth JWT"]];
+const schemesByKey = Object.fromEntries(schemes);
+const clock = new Intl.DateTimeFormat("zh-CN", {month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hourCycle:"h23"});
+const credentialTypes = [
+  ["api_key","API Key",[["token","API Key",true]]],
+  ["access_key_pair","AccessKey",[["access_id","AccessKey ID",true],["access_secret","AccessKey Secret",true],["session_token","会话令牌"]]],
+  ["oauth","OAuth",[["access_token","访问令牌"],["refresh_token","刷新令牌"],["client_id","客户端 ID",false,"text"],["client_secret","客户端 Secret"],["token_endpoint","令牌地址",false,"url"]]],
+  ["ssh_key","SSH 密钥",[["private_key","私钥",true,"textarea"],["private_key_passphrase","私钥口令"],["public_key","公钥",false,"textarea"]]],
+  ["database","数据库",[["username","用户名",true,"text"],["password","密码",true],["database","数据库名",false,"text"]]],
+  ["client_cert","客户端证书",[["certificate_chain","证书链",true,"textarea"],["private_key","私钥",true,"textarea"]]],
+];
+const endpoints = [
+  ["status","/v1/status"], ["credentials","/v1/credentials"], ["bindings","/v1/bindings"],
+  ["subjects","/v1/subjects"], ["grants","/v1/grants"], ["integrations","/v1/integrations"],
+  ["biometric","/v1/auth/status"], ["events","/v1/activity"],
+];
+const sectionNames = {status:"服务状态",credentials:"凭证",bindings:"凭证绑定",subjects:"授权主体",grants:"授权",integrations:"工具接入",biometric:"Touch ID 状态",events:"使用记录"};
+const errors = {
+  SESSION_INVALID:"管理员连接已失效，请重新连接。",
+  VAULT_LOCKED:"请先解锁密钥库。",
+  VAULT_UNLOCK_FAILED:"主密码不正确，请重试。",
+  AUTH_UNAVAILABLE:"Touch ID 当前不可用，可改用主密码。",
+  AUTH_REQUIRED:"Touch ID 验证已取消。可重试或选择主密码。",
+};
+const unusable = () => !state.status || state.status.locked || state.status.state === "uninitialized";
+
+async function api(path, body) {
+  const res = await fetch("/api" + path, {
+    method:body === undefined ? "GET" : "POST",
+    headers:{"Content-Type":"application/json","X-KeyKoi-CSRF":"1","X-KeyKoi-Admin":state.token},
+    cache:"no-store", body:body === undefined ? undefined : JSON.stringify(body),
+    signal:AbortSignal.timeout(45000),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    const error = new Error(data?.error?.message || "服务返回 HTTP " + res.status);
+    error.code = data?.error?.code;
+    throw error;
+  }
+  if (data === null) throw new Error("本机服务返回了无法读取的数据。");
+  return data;
+}
+function message(error) {
+  if (error.name === "TimeoutError") return "本机服务响应超时，请重试。";
+  if (error instanceof TypeError) return "无法连接本机服务，请确认 KeyKoi 正在运行。";
+  return errors[error.code] || error.message;
+}
+function notice(text = "", isError = false) {
+  $("feedback").hidden = !text;
+  $("feedback").textContent = text;
+  $("feedback").dataset.error = isError;
+}
+function applyData(key, data) {
+  if (key === "status") state.status = data;
+  else if (key === "biometric") state.biometric = data.biometric;
+  else state[key] = data[key] || [];
+  if (key === "events") $("activity-window").textContent = "最近 " + data.audit_limit + " 条审计中的用钥事件。代理请求的授权与上游响应分别记录。";
+}
+async function refresh(keys = endpoints.map(([key]) => key)) {
+  const requested = endpoints.filter(([key]) => keys.includes(key));
+  const responses = await Promise.allSettled(requested.map(([,path]) => api(path)));
+  const failures = [];
+  responses.forEach((response, index) => {
+    const [key] = requested[index];
+    if (response.status === "fulfilled") applyData(key, response.value);
+    else failures.push(sectionNames[key] + "：" + message(response.reason));
+  });
+  render();
+  return failures;
+}
+async function afterChange(keys, text) {
+  const failures = await refresh(keys);
+  notice([text,...failures].filter(Boolean).join(" "), failures.length > 0);
+}
+async function action(button, work) {
+  if (button.disabled) return;
+  button.disabled = true;
+  try { await work(); } catch (error) { notice(message(error), true); }
+  finally { button.disabled = false; renderStatus(); }
+}
+function view(name) {
+  for (const button of document.querySelectorAll("nav button")) {
+    const selected = button.dataset.view === name;
+    $(button.dataset.view + "-panel").hidden = !selected;
+    button.toggleAttribute("aria-current", selected);
+    if (selected) button.setAttribute("aria-current", "page");
+  }
+}
+function button(text, call, style = "secondary") {
+  const el = document.createElement("button");
+  el.type = "button";
+  el.className = style;
+  el.textContent = text;
+  el.onclick = () => call(el);
+  return el;
+}
+function cell(row, value) {
+  const el = row.insertCell();
+  const header = row.closest("table").tHead.rows[0].cells[el.cellIndex];
+  el.dataset.label = header.textContent;
+  el.setAttribute("role","cell");
+  row.setAttribute("role","row");
+  if (value instanceof Node) el.append(value);
+  else el.textContent = value ?? "—";
+  return el;
+}
+function pill(text, tone = "") {
+  const el = document.createElement("span");
+  el.className = "pill " + tone;
+  el.textContent = text || "—";
+  return el;
+}
+function paired(primary, detail) {
+  const el = document.createElement("span");
+  const title = document.createElement("span");
+  title.className = "table-primary";
+  title.textContent = primary || "—";
+  el.append(title);
+  if (detail) {
+    const sub = document.createElement("small");
+    sub.className = "table-detail";
+    sub.textContent = detail;
+    el.append(sub);
+  }
+  return el;
+}
+function rowButtons(row, ...items) {
+  const group = document.createElement("div");
+  group.className = "actions";
+  group.append(...items);
+  cell(row, group);
+}
+function empty(body, columns, title, detail) {
+  const el = cell(body.insertRow(), paired(title, detail));
+  el.colSpan = columns;
+  el.className = "empty";
+}
+function date(value) {
+  const instant = new Date(value);
+  return value && !Number.isNaN(instant.getTime()) ? clock.format(instant) : "—";
+}
+const credentialName = id => state.credentials.find(item => item.id === id)?.label || id || "—";
+const subjectName = id => state.subjects.find(item => item.id === id)?.label || id || "未识别";
+function bindingName(id) {
+  const binding = state.bindings.find(item => item.id === id);
+  return binding ? credentialName(binding.credential_id) + " · " + (binding.route || binding.id) : id || "—";
+}
+function policyName(value = "once") {
+  return {once:"每个会话一次",per_use:"每次使用",permanent:"永久免验证"}[value] || (value.startsWith("window:") ? value.slice(7) + " 秒内复用" : value);
+}
+function replaceOptions(select, options, placeholder) {
+  const current = select.value;
+  select.replaceChildren();
+  if (placeholder) select.add(new Option(placeholder,""));
+  options.forEach(([value,label]) => select.add(new Option(label,value)));
+  if ([...select.options].some(option => option.value === current)) select.value = current;
+}
+
+function renderActivity() {
+  const subjectOptions = [...new Set(state.events.map(event => event.principal_id || "unknown"))];
+  replaceOptions($("activity-subject"), subjectOptions.map(id => [id,subjectName(id === "unknown" ? "" : id)]), "全部主体");
+  const subject = $("activity-subject").value, mode = $("activity-mode").value, result = $("activity-result").value;
+  const group = event => ["allowed","denied"].includes(event.result) ? event.result : event.error_code || /^http_[45]/.test(event.result) ? "error" : "upstream";
+  const events = state.events.filter(event =>
+    (!subject || (event.principal_id || "unknown") === subject) &&
+    (!mode || event.mode === mode) && (!result || group(event) === result));
+  $("count-records").textContent = events.length;
+  $("count-allowed").textContent = events.filter(event => event.result === "allowed").length;
+  $("count-denied").textContent = events.filter(event => event.result === "denied").length;
+  const body = $("activity-rows");
+  body.replaceChildren();
+  if (!events.length) empty(body,7,state.events.length ? "没有符合筛选条件的记录" : "暂无用钥记录",
+    state.events.length ? "可清除筛选后重试。" : "通过 KeyKoi 调用一次已绑定的服务后，记录会出现在这里。");
+  for (const event of events) {
+    const row = body.insertRow(), kind = group(event);
+    cell(row,date(event.time)).className = "time";
+    cell(row,subjectName(event.principal_id));
+    cell(row,bindingName(event.binding_id));
+    cell(row,modesByKey[event.mode] || event.mode);
+    cell(row,event.auth_result === "not_required" ? "无需验证" :
+      paired(authMethods[event.auth_method] || event.auth_method || "—",authResults[event.auth_result] || event.auth_result));
+    const label = {allowed:"放行",denied:"拒绝"}[event.result] || (event.result?.startsWith("http_") ? "HTTP " + event.result.slice(5) : event.result);
+    const outcome = cell(row,pill(label,kind === "allowed" ? "good" : ["denied","error"].includes(kind) ? "bad" : ""));
+    if (event.error_code) {
+      const code = document.createElement("small");
+      code.className = "table-detail";
+      code.textContent = event.error_code;
+      outcome.append(code);
+    }
+    cell(row,typeof event.duration_ms === "number" && !(kind === "denied" && !event.duration_ms) ? event.duration_ms + " ms" : "—");
+  }
+}
+
+function renderVault() {
+  const creds = $("creds"), bindings = $("bindings");
+  creds.replaceChildren();
+  bindings.replaceChildren();
+  $("credential-count").textContent = state.credentials.length + " 个凭证";
+  if (!state.credentials.length) empty(creds,5,"尚未导入凭证","添加 API Key 或其他凭证来开始。");
+  if (!state.bindings.length) empty(bindings,5,"尚未创建绑定","先导入凭证，再将它绑定到目标服务。");
+  for (const item of state.credentials) {
+    const row = creds.insertRow();
+    cell(row,paired(item.label,item.id));
+    cell(row,credentialTypes.find(([key]) => key === item.kind)?.[1] || item.kind);
+    cell(row,"v" + item.current_version);
+    cell(row,pill(statuses[item.status] || item.status,item.status === "active" ? "good" : ""));
+    if (item.status !== "active") { cell(row,"—"); continue; }
+    rowButtons(row,button("轮换",() => openCredential(item)),
+      button("停用",() => confirmAction("停用凭证","停用后，此凭证的关联授权将无法用钥。",() => api("/v1/credentials/" + encodeURIComponent(item.id) + "/disable",{}),["credentials","bindings"],"凭证已停用。")));
+  }
+  for (const item of state.bindings) {
+    const row = bindings.insertRow();
+    cell(row,paired(item.route || item.id,item.route && item.route !== item.id ? item.id : ""));
+    cell(row,credentialName(item.credential_id));
+    cell(row,item.upstream_origin);
+    cell(row,schemesByKey[item.auth_scheme] || item.auth_scheme);
+    const eligible = item.status === "active" && state.credentials.some(credential => credential.id === item.credential_id && credential.status === "active");
+    if (eligible) rowButtons(row,button("授权",() => { view("access"); openGrant(item.id); }));
+    else cell(row,"—");
+  }
+}
+function renderAccess() {
+  const grants = $("grants");
+  grants.replaceChildren();
+  if (!state.grants.length) empty(grants,7,"尚未设置授权","新建授权后，可以在这里查看策略和撤销权限。");
+  for (const grant of state.grants) {
+    const row = grants.insertRow();
+    cell(row,subjectName(grant.principal_id));
+    cell(row,bindingName(grant.binding_id));
+    cell(row,modesByKey[grant.delivery_mode] || grant.delivery_mode);
+    cell(row,pill(policyName(grant.auth_requirement),grant.auth_requirement === "permanent" ? "bad" : ""));
+    const evidence = state.events.find(e => e.principal_id === grant.principal_id && e.binding_id === grant.binding_id &&
+      e.mode === grant.delivery_mode && e.auth_result === "verified" && e.auth_method && e.auth_method !== "none");
+    cell(row,evidence ? paired(authMethods[evidence.auth_method] || evidence.auth_method,date(evidence.time)) : "—");
+    cell(row,pill(statuses[grant.status] || grant.status,grant.status === "active" ? "good" : ""));
+    const path = "/v1/grants/" + encodeURIComponent(grant.id);
+    const revoke = button("撤销",() => confirmAction("撤销授权","该条授权将立即停止接受新的用钥请求。",() => api(path + "/revoke",{}),["grants"],"授权已撤销。"));
+    if (grant.status === "pending_review") {
+      rowButtons(row,button("批准",() => confirmAction("批准待复核授权","批准后主体会恢复此条绑定的使用权限。",() => api(path + "/approve",{}),["grants"],"授权已批准。")),revoke);
+    } else if (grant.status === "active") rowButtons(row,revoke);
+    else cell(row,"—");
+  }
+}
+function renderIntegrations() {
+  const body = $("integrations");
+  body.replaceChildren();
+  if (!state.integrations.length) empty(body,5,"暂无工具接入","可按已有适配器预览将要写入的配置。");
+  for (const item of state.integrations) {
+    const row = body.insertRow();
+    cell(row,paired(item.ProfileID || item.ID,item.ProfileID ? item.ID : ""));
+    cell(row,pill(statuses[item.State] || item.State));
+    cell(row,item.ToolVersion);
+    cell(row,item.VerifiedVersion);
+    const path = "/v1/integrations/" + encodeURIComponent(item.ID);
+    rowButtons(row,button("验证",el => action(el,async () => {
+      await api(path + "/verify",{});
+      await afterChange(["integrations"],"已完成接入验证。");
+    })),button("撤销接入",() => confirmAction("撤销工具接入","此操作会尝试恢复该适配器管理的配置。",() => api(path + "/detach",{}),["integrations"],"工具接入已撤销。")));
+  }
+}
+
+function renderStatus() {
+  const status = state.status, bio = state.biometric;
+  const initialized = status && status.state !== "uninitialized", ready = initialized && !status.locked;
+  const label = !status ? "连接异常" : !initialized ? "待初始化" : ready ? "密钥库已解锁" : "密钥库已锁定";
+  $("state").textContent = label;
+  $("state").dataset.ready = !!ready;
+  $("service-status").textContent = label;
+  $("gateway-address").textContent = status?.gateway || "未启用";
+  $("biometric-note").textContent = !bio ? "暂时无法读取" : !bio.available ? "不可用" : bio.enrolled ? "已登记" : "可用，登记状态待验证";
+  $("biometric-note").title = bio?.last_error || bio?.reason || "";
+  $("unlock").hidden = !(initialized && status.locked);
+  $("unlock-biometric").hidden = !(initialized && status.locked && bio?.available);
+  $("enroll-biometric").hidden = !(ready && bio?.available);
+  $("enroll-biometric").textContent = bio?.enrolled ? "重新登记 Touch ID" : "登记 Touch ID";
+  $("lock").hidden = !ready;
+  $("backup").disabled = !initialized;
+  const top = $("vault-action");
+  top.hidden = !status;
+  top.textContent = !initialized ? "初始化" : ready ? "锁定" : bio?.available ? "Touch ID 解锁" : "解锁";
+  top.onclick = () => !initialized ? openPassword("init") : ready ? lockVault() : bio?.available ? biometricUnlock(top) : openPassword("unlock");
+  const activeCred = state.credentials.some(c => c.status === "active");
+  const activeBind = state.bindings.some(b => b.status === "active" && state.credentials.some(c => c.id === b.credential_id && c.status === "active"));
+  const activeGrant = state.grants.some(g => g.status === "active" && state.bindings.some(b => b.id === g.binding_id && b.status === "active" && state.credentials.some(c => c.id === b.credential_id && c.status === "active")));
+  let step;
+  if (status && !initialized) step = ["初始化密钥库","设置主密码后即可导入凭证。","初始化",() => openPassword("init")];
+  else if (status?.locked) step = ["密钥库已锁定","解锁后即可导入、轮换和使用凭证。",bio?.available ? "Touch ID 解锁" : "主密码解锁",el => bio?.available ? biometricUnlock(el) : openPassword("unlock")];
+  else if (ready && !activeCred) step = ["导入第一个凭证","导入后可创建绑定并授权给指定主体。","导入凭证",() => { view("vault"); openCredential(); }];
+  else if (ready && !activeBind) step = ["为凭证添加绑定","填写凭证可访问的目标服务。","新建绑定",() => { view("vault"); openBinding(); }];
+  else if (ready && !activeGrant) step = ["设置使用权限","为账户或 Agent 选择一个绑定。","新建授权",() => { view("access"); openGrant(); }];
+  $("setup").hidden = !step;
+  if (step) {
+    $("setup-title").textContent = step[0];
+    $("setup-note").textContent = step[1];
+    $("setup-action").textContent = step[2];
+    $("setup-action").onclick = () => step[3]($("setup-action"));
+  }
+}
+function render() {
+  renderStatus();
+  renderActivity();
+  renderVault();
+  renderAccess();
+  renderIntegrations();
+}
+
+const editor = $("editor");
+let submit;
+function paragraph(text) {
+  const el = document.createElement("p");
+  el.className = "inline-note";
+  el.textContent = text;
+  return el;
+}
+function field(label, name, options = {}) {
+  const wrap = document.createElement("label");
+  wrap.className = "field";
+  const caption = document.createElement("span");
+  caption.textContent = label;
+  const control = document.createElement(options.items ? "select" : options.type === "textarea" ? "textarea" : "input");
+  if (control.tagName === "INPUT") control.type = options.type || "text";
+  control.name = name;
+  if (options.items) replaceOptions(control,options.items,options.placeholder);
+  if (options.value !== undefined) control.value = options.value;
+  control.required = options.required ?? true;
+  control.autocomplete = "off";
+  if (!options.items && options.placeholder) control.placeholder = options.placeholder;
+  if (options.pattern) control.pattern = options.pattern;
+  if (options.min !== undefined) control.min = options.min;
+  if (options.max !== undefined) control.max = options.max;
+  if (options.minLength) control.minLength = options.minLength;
+  wrap.append(caption,control);
+  return {wrap,control};
+}
+function grid(...fields) {
+  const el = document.createElement("div");
+  el.className = "form-grid";
+  el.append(...fields.map(field => field.wrap));
+  return el;
+}
+function openEditor(title, label, elements, onSubmit, dangerous = false) {
+  $("dialog-title").textContent = title;
+  $("dialog-body").replaceChildren(...elements);
+  $("dialog-error").hidden = true;
+  $("save-dialog").textContent = label;
+  $("save-dialog").classList.toggle("danger",dangerous);
+  submit = onSubmit;
+  if (!editor.open) editor.showModal();
+  const focus = $("dialog-body").querySelector("input:not([disabled]), select:not([disabled]), textarea");
+  if (focus) focus.focus();
+}
+$("editor-form").onsubmit = async event => {
+  event.preventDefault();
+  const save = $("save-dialog");
+  if (save.disabled) return;
+  save.disabled = true;
+  $("dialog-error").hidden = true;
+  try {
+    const outcome = await submit(new FormData(event.target));
+    if (outcome) {
+      editor.close();
+      await afterChange(outcome.keys,outcome.message);
+    }
+  } catch (error) {
+    $("dialog-error").textContent = message(error);
+    $("dialog-error").hidden = false;
+  } finally { save.disabled = false; }
+};
+$("close-dialog").onclick = $("cancel-dialog").onclick = () => { if (!$("save-dialog").disabled) editor.close(); };
+editor.addEventListener("cancel", event => { if ($("save-dialog").disabled) event.preventDefault(); });
+editor.addEventListener("close", () => {
+  if (!editor.open) { $("dialog-body").replaceChildren(); submit = null; }
+});
+function saveTo(path, payload, keys, text) {
+  return api(path,payload).then(() => ({keys,message:text}));
+}
+function confirmAction(title, detail, run, keys, text, dangerous = false) {
+  openEditor(title,"确认",[paragraph(detail)],async () => { await run(); return {keys,message:text}; },dangerous);
+}
+function openPassword(mode) {
+  const init = mode === "init";
+  const password = field("主密码","password",{type:"password",minLength:init ? 8 : undefined});
+  const confirmation = field("再次输入主密码","confirm",{type:"password",minLength:8});
+  openEditor(init ? "初始化密钥库" : "主密码解锁",init ? "初始化" : "解锁",
+    init ? [paragraph("密码至少 8 个字符。"),password.wrap,confirmation.wrap] : [password.wrap],values => {
+      if (init && values.get("password") !== values.get("confirm")) throw new Error("两次输入的主密码不一致。");
+      return saveTo("/v1/vault/" + mode,{password:values.get("password")},["status","biometric"],init ? "密钥库已初始化。" : "密钥库已解锁。");
+    });
+}
+function lockVault() {
+  confirmAction("锁定密钥库","锁定会结束当前用钥会话。",() => api("/v1/vault/lock",{}),["status","biometric","events"],"密钥库已锁定。");
+}
+function biometricUnlock(el) {
+  return action(el,async () => {
+    notice("请完成 macOS 的 Touch ID 验证。");
+    try {
+      await api("/v1/vault/unlock-biometric",{});
+      await afterChange(["status","biometric","events"],"已用 Touch ID 解锁。");
+    } catch (error) {
+      if (error.code === "AUTH_UNAVAILABLE") openPassword("unlock");
+      throw error;
+    }
+  });
+}
+function openCredential(existing) {
+  if (unusable()) { openPassword(state.status?.state === "uninitialized" ? "init" : "unlock"); return; }
+  const type = field("类型","kind",{items:credentialTypes.map(([key,label]) => [key,label]),value:existing?.kind || "api_key"});
+  const label = field("名称","label",{placeholder:"例如 开发环境",value:existing?.label || ""});
+  const expiry = field("到期时间（可选）","expiry",{type:"datetime-local",required:false});
+  const fields = document.createElement("div");
+  fields.className = "form-grid";
+  function renderFields() {
+    const specs = credentialTypes.find(([key]) => key === type.control.value)?.[2] || [];
+    fields.replaceChildren(...specs.map(([name,label,required,kind]) =>
+      field(label + (required ? "" : "（可选）"),"secret-" + name,{type:kind || "password",required:!!required}).wrap));
+  }
+  type.control.onchange = renderFields;
+  renderFields();
+  openEditor(existing ? "轮换 · " + existing.label : "导入凭证",existing ? "保存新版本" : "导入凭证",
+    [existing ? paragraph("请填写新版本的完整凭证。") : grid(type,label),fields,expiry.wrap],values => {
+      const secrets = Object.fromEntries([...values.entries()]
+        .filter(([key,value]) => key.startsWith("secret-") && value.trim())
+        .map(([key,value]) => [key.slice(7),value]));
+      if (!Object.keys(secrets).length) throw new Error("至少填写一个凭证字段。");
+      const body = {fields:secrets};
+      if (!existing) Object.assign(body,{kind:values.get("kind"),label:values.get("label").trim()});
+      if (values.get("expiry")) body.provider_expires_at = new Date(values.get("expiry")).toISOString();
+      const path = existing ? "/v1/credentials/" + encodeURIComponent(existing.id) + "/versions" : "/v1/credentials";
+      return saveTo(path,body,["credentials","bindings"],existing ? "凭证已轮换。" : "凭证已导入，可以新建绑定。");
+    });
+}
+function openBinding() {
+  const active = state.credentials.filter(item => item.status === "active");
+  if (!active.length) { notice("请先导入一个有效凭证。"); openCredential(); return; }
+  const credential = field("凭证","credential",{items:active.map(item => [item.id,item.label])});
+  const route = field("路由名称","route",{placeholder:"例如 openai-dev",pattern:"[a-zA-Z0-9][a-zA-Z0-9_\\-]*"});
+  const origin = field("目标服务地址","origin",{type:"url",placeholder:"https://api.example.com"});
+  const scheme = field("上游认证","scheme",{items:schemes});
+  const prefix = field("允许的路径前缀（可选）","paths",{placeholder:"例如 /v1",required:false});
+  const token = field("凭证中的令牌字段（可选）","token_field",{placeholder:"默认由认证方式选择",required:false});
+  const authHeader = field("API Key 请求头","auth_header",{placeholder:"默认 X-API-Key",required:false});
+  const basicUser = field("用户名字段（可选）","username_field",{placeholder:"默认 username",required:false});
+  const basicPassword = field("密码字段（可选）","password_field",{placeholder:"默认 password",required:false});
+  const adapter = field("适配器标识（可选）","adapter_id",{required:false});
+  const more = document.createElement("details"), summary = document.createElement("summary");
+  summary.textContent = "高级选项";
+  more.append(summary,grid(token,authHeader),grid(basicUser,basicPassword),adapter.wrap);
+  openEditor("新建凭证绑定","创建绑定",[grid(credential,route),origin.wrap,grid(scheme,prefix),more],values => {
+    const name = values.get("route").trim();
+    const target = new URL(values.get("origin").trim());
+    if (!["http:","https:"].includes(target.protocol) || target.username || target.password || target.pathname !== "/" || target.search || target.hash) {
+      throw new Error("目标地址只填写 HTTP(S) 协议、主机和端口。路径请填在下方。");
+    }
+    if (state.bindings.some(item => item.route === name || item.id === name)) throw new Error("此路由名称已存在，请换一个名称。");
+    const paths = values.get("paths").split(/[,\n]/).map(value => value.trim()).filter(Boolean);
+    if (paths.some(path => !path.startsWith("/"))) throw new Error("路径前缀必须以 / 开头。");
+    const body = {id:"bind_" + crypto.randomUUID(),credential_id:values.get("credential"),route:name,upstream_origin:target.origin,auth_scheme:values.get("scheme"),allowed_paths:paths};
+    for (const name of ["token_field","auth_header","username_field","password_field","adapter_id"]) if (values.get(name).trim()) body[name] = values.get(name).trim();
+    return saveTo("/v1/bindings",body,["bindings"],"绑定已创建，可以为账户或 Agent 授权。");
+  });
+}
+function openGrant(bindingID) {
+  const usable = state.bindings.filter(b => b.status === "active" && state.credentials.some(c => c.id === b.credential_id && c.status === "active"));
+  if (!usable.length) { view("vault"); openBinding(); return; }
+  if (!state.subjects.length) { notice("未读到可用的授权主体，请刷新状态。",true); return; }
+  const who = field("授权对象","principal",{items:state.subjects.map(item => [item.id,item.label])});
+  const binding = field("凭证绑定","binding",{items:usable.map(item => [item.id,bindingName(item.id)]),value:bindingID || usable[0].id});
+  const mode = field("用钥方式","mode",{items:modes});
+  const policy = field("验证策略","policy",{items:[["once","每个会话一次"],["window","在指定时间内复用"],["per_use","每次使用都验证"],["permanent","永久免验证"]]});
+  const duration = field("复用时长（秒）","window",{type:"number",value:"300",min:1,max:604800});
+  const confirmation = field("输入 PERMANENT 确认","confirmation");
+  const check = document.createElement("input"), consent = document.createElement("label");
+  check.type = "checkbox";
+  check.name = "consent";
+  consent.className = "checkbox";
+  consent.append(check,"我确认此授权不再触发身份验证。");
+  const scope = paragraph(""), strategy = paragraph("");
+  function update() {
+    const chosen = policy.control.value, always = chosen === "permanent", windowed = chosen === "window";
+    duration.wrap.hidden = !windowed; duration.control.disabled = !windowed;
+    confirmation.wrap.hidden = consent.hidden = !always; confirmation.control.disabled = check.disabled = !always;
+    check.required = always;
+    strategy.textContent = {
+      once:"新会话首次使用时需要验证。",window:"验证成功后，可在指定时间内复用。",
+      per_use:"每一次用钥请求都会要求验证。",permanent:"该主体可直接用钥。请确认授权的范围。",
+    }[chosen];
+    scope.textContent = state.subjects.find(s => s.id === who.control.value)?.key === "me" ? "账户级授权覆盖该 macOS 账户下的程序。" : "此授权只匹配对应 Agent 的用钥会话。";
+  }
+  who.control.onchange = policy.control.onchange = update;
+  update();
+  openEditor("新建授权","添加授权",[grid(who,binding),scope,grid(mode,policy),strategy,duration.wrap,consent,confirmation.wrap],values => {
+    const choice = values.get("policy");
+    if (choice === "permanent" && (values.get("confirmation") !== "PERMANENT" || !values.get("consent"))) throw new Error("请勾选确认并输入 PERMANENT。");
+    const body = {principal_id:values.get("principal"),binding_id:values.get("binding"),delivery_mode:values.get("mode"),
+      auth_requirement:choice === "window" ? "window:" + values.get("window") : choice};
+    if (state.grants.some(g => g.status === "active" && g.principal_id === body.principal_id && g.binding_id === body.binding_id && g.delivery_mode === body.delivery_mode)) {
+      throw new Error("相同范围已有有效授权。要变更策略，请先撤销旧授权。");
+    }
+    return saveTo("/v1/grants",body,["grants"],"授权已添加。");
+  });
+}
+function openAgent() {
+  const label = field("显示名称","label",{placeholder:"例如 我的 Agent"});
+  const key = field("授权标识","key",{placeholder:"例如 my-agent",pattern:"[a-z0-9][a-z0-9\\-]{0,63}"});
+  const executable = field("原生可执行文件路径","executable",{placeholder:"/absolute/path/to/agent"});
+  openEditor("登记 Agent","登记",[grid(label,key),executable.wrap,paragraph("请选择该 Agent 自己的 macOS 原生二进制。")],values =>
+    saveTo("/v1/subjects",Object.fromEntries(values),["subjects"],"Agent 已登记，可在新建授权时选择。"));
+}
+function openBackup(restore) {
+  const path = field("本机文件路径","path",{placeholder:"/absolute/path/to/vault.backup"});
+  const reminder = restore ? paragraph("恢复会替换当前密钥库内容。恢复后需解锁并复核授权。") : paragraph("将加密备份写入指定文件。");
+  openEditor(restore ? "恢复加密备份" : "创建加密备份",restore ? "恢复" : "备份",[reminder,path.wrap],values => {
+    const target = values.get("path").trim();
+    if (!target.startsWith("/")) throw new Error("请填写以 / 开头的本机绝对路径。");
+    return saveTo("/v1/vault/" + (restore ? "restore" : "backup"),{path:target},
+      restore ? endpoints.map(([key]) => key) : [],restore ? "备份已恢复，密钥库已锁定。" : "加密备份已保存。");
+  },restore);
+}
+function openIntegration() {
+  const profile = field("适配器标识","profile_id",{placeholder:"输入已安装的适配器标识"});
+  openEditor("预览工具接入","生成预览",[profile.wrap],async values => {
+    const id = values.get("profile_id").trim();
+    const plan = await api("/v1/integrations/plan",{profile_id:id});
+    const preview = document.createElement("pre");
+    preview.className = "preview";
+    preview.textContent = plan.preview || plan.config_path || id;
+    openEditor("应用接入 · " + id,"应用配置",[paragraph("确认下方将要写入的非敏感配置。"),preview],() =>
+      saveTo("/v1/integrations/apply",{profile_id:id},["integrations"],"配置已应用。"));
+  });
+}
+
+async function connect(token) {
+  const button = $("connect");
+  if (!token || button.disabled) return;
+  const previous = state.token;
+  button.disabled = true;
+  state.token = token;
+  $("login-error").hidden = true;
+  try {
+    applyData("status",await api("/v1/status"));
+    $("token").value = "";
+    $("login").hidden = true;
+    $("console").hidden = false;
+    renderStatus();
+    await afterChange(endpoints.map(([key]) => key),"");
+  } catch (error) {
+    state.token = previous;
+    $("token").value = "";
+    $("login-error").textContent = message(error);
+    $("login-error").hidden = false;
+    if (previous) notice(message(error),true);
+    else $("token").focus();
+  } finally { button.disabled = false; }
+}
+function consumeTokenFromHash() {
+  const raw = window.location.hash || "";
+  if (raw.length < 2) return "";
+  const params = new URLSearchParams(raw.slice(1));
+  const token = (params.get("token") || "").trim();
+  if (!token) return "";
+  const stripped = window.location.pathname + window.location.search;
+  try {
+    window.history.replaceState(null, "", stripped);
+  } catch (e) {
+    window.location.hash = "";
+  }
+  return token;
+}
+function loginFromHash() {
+  const token = consumeTokenFromHash();
+  if (token) connect(token);
+}
+$("login-form").onsubmit = event => { event.preventDefault(); connect($("token").value.trim()); };
+window.addEventListener("hashchange",loginFromHash);
+for (const nav of document.querySelectorAll("nav button")) nav.onclick = () => { notice(); view(nav.dataset.view); };
+for (const id of ["activity-subject","activity-mode","activity-result"]) $(id).onchange = renderActivity;
+$("activity-clear").onclick = () => {
+  for (const id of ["activity-subject","activity-mode","activity-result"]) $(id).value = "";
+  renderActivity();
+};
+$("activity-refresh").onclick = () => action($("activity-refresh"),() => afterChange(["events"],"记录已刷新。"));
+$("refresh").onclick = () => action($("refresh"),() => afterChange(endpoints.map(([key]) => key),"状态已刷新。"));
+$("add-credential").onclick = () => openCredential();
+$("add-binding").onclick = openBinding;
+$("add-grant").onclick = () => openGrant();
+$("register-agent").onclick = openAgent;
+$("unlock").onclick = () => openPassword("unlock");
+$("unlock-biometric").onclick = () => biometricUnlock($("unlock-biometric"));
+$("enroll-biometric").onclick = () => confirmAction("登记 Touch ID","请在 macOS 弹出的窗口中确认。",() => api("/v1/vault/enroll-biometric",{}),["biometric"],"Touch ID 已登记。");
+$("lock").onclick = lockVault;
+$("backup").onclick = () => openBackup(false);
+$("restore").onclick = () => openBackup(true);
+$("add-integration").onclick = openIntegration;
+loginFromHash();
+</script>
+</body>
+</html>
