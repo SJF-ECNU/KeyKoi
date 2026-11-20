@@ -1,0 +1,221 @@
+{
+  "phase": "tencent-huawei-signer",
+  "protocols": [
+    {
+      "id": "tencent-tc3",
+      "algorithm": "TC3-HMAC-SHA256",
+      "adapter_id": "tencent-tc3/<region>/<service>",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "canonical_uri": "/ (API 3.0 固定值；其他路径直接拒绝)",
+      "signed_headers": [
+        "content-type",
+        "host",
+        "x-tc-action（给出 action 时）",
+        "content-md5（可选）"
+      ],
+      "session_token_delivery": "X-TC-Token 作为请求头返回；TC3 的 Token 不参与 CanonicalHeaders（与官方 SDK 一致）。",
+      "vectors": [
+        "腾讯云文档 POST 示例（content-type;host）：Signature=72e494ea809ad7a8c8f7a4507b9bddcbaa8e581f516e8da2f66e2c5a96525168",
+        "腾讯云文档 POST 示例（content-type;host;x-tc-action）：HashedCanonicalRequest=7019a55b…，用文档公布的 SecretSigning 复算得到文档公布的 Signature=10b1a37a…"
+      ],
+      "upstream": {
+        "requests": 2,
+        "verified": 2,
+        "failed": 0
+      }
+    },
+    {
+      "id": "huawei-aksk",
+      "algorithm": "SDK-HMAC-SHA256",
+      "adapter_id": "huawei-aksk/<region>/<service>",
+      "methods": [
+        "GET",
+        "HEAD",
+        "POST",
+        "PUT",
+        "DELETE",
+        "PATCH",
+        "OPTIONS"
+      ],
+      "canonical_uri": "逐段 RFC3986 编码，并以 / 结尾",
+      "signed_headers": [
+        "host",
+        "x-sdk-date",
+        "content-type（可选）",
+        "content-md5（可选）",
+        "x-security-token（有会话令牌时）"
+      ],
+      "session_token_delivery": "X-Security-Token 作为请求头返回并参与签名。",
+      "vectors": [
+        "华为云《API签名指南》VPC 查询示例：HashedCanonicalRequest=b25362e6…（文档把 SK 打码，签名值无法在无 SK 时复算）",
+        "固定回归向量 GET/POST 各一组：完整 Authorization 写死，由受控校验上游独立复算"
+      ],
+      "upstream": {
+        "requests": 2,
+        "verified": 2,
+        "failed": 0
+      }
+    }
+  ],
+  "dispatch": "POST /v1/signatures 按 Binding.AdapterID 前缀分派：aws-sigv4/、tencent-tc3/、huawei-aksk/",
+  "credential": "access_key_pair：access_id/access_secret/session_token 必须同一版本完整；缺字段不补默认值。",
+  "limits": {
+    "single_complete_sha256_payload": true,
+    "chunked_streaming_payload": false,
+    "tencent_post_with_query": false,
+    "real_cloud_endpoint_tested": false
+  },
+  "logging": "签名材料不写入日志或审计；secret 只在本进程内使用，响应只含签名头与许可元数据。",
+  "environment": {
+    "os": "macOS 27.0",
+    "arch": "arm64",
+    "go": "go version go1.25.5 darwin/arm64",
+    "tc3_upstream": "http://127.0.0.1:52809",
+    "huawei_upstream": "http://127.0.0.1:52810",
+    "upstream": "tests/fixtures/cloudsignverify (TC3 / SDK-HMAC-SHA256 independent recomputation, no credential persistence)"
+  },
+  "checks": [
+    {
+      "status": "PASS",
+      "name": "Tencent TC3 + Huawei AK/SK vectors (go test ./internal/signer)",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "tc3 signature headers emitted",
+      "detail": "ok"
+    },
+    {
+      "status": "PASS",
+      "name": "tc3 secret key absent from emitted headers",
+      "detail": "absent"
+    },
+    {
+      "status": "PASS",
+      "name": "tc3 controlled upstream verifies signature",
+      "detail": "True"
+    },
+    {
+      "status": "PASS",
+      "name": "tc3 canonical URI fixed to /",
+      "detail": "/"
+    },
+    {
+      "status": "PASS",
+      "name": "tc3 signed headers include x-tc-action",
+      "detail": "content-type;host;x-tc-action"
+    },
+    {
+      "status": "PASS",
+      "name": "tc3 GET signature verified with sorted query",
+      "detail": "True"
+    },
+    {
+      "status": "PASS",
+      "name": "tc3 GET canonical query sorted",
+      "detail": "Limit=10&Offset=0"
+    },
+    {
+      "status": "PASS",
+      "name": "huawei signature headers emitted",
+      "detail": "ok"
+    },
+    {
+      "status": "PASS",
+      "name": "huawei secret key absent from emitted headers",
+      "detail": "absent"
+    },
+    {
+      "status": "PASS",
+      "name": "huawei GET signature verified by controlled upstream",
+      "detail": "True"
+    },
+    {
+      "status": "PASS",
+      "name": "huawei canonical URI ends with /",
+      "detail": "/kk/v2/proj/servers/"
+    },
+    {
+      "status": "PASS",
+      "name": "huawei POST signature verified with payload digest",
+      "detail": "True"
+    },
+    {
+      "status": "PASS",
+      "name": "huawei payload digest covers the sent body",
+      "detail": "35e9c5b0e3ae67532d3c9f17ead6c90222632e5b1ff7f6e89887f1398934f064"
+    },
+    {
+      "status": "PASS",
+      "name": "tc3 unregistered host rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "tc3 path outside the fixed canonical URI rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "tc3 binding without sign grant rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "tc3 wrong region override rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "tc3 post with query string rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "tc3 unsupported method rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "credential without access_secret rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "static access key signs without an X-TC-Token",
+      "detail": "absent"
+    },
+    {
+      "status": "PASS",
+      "name": "protocol does not match the registered adapter",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "huawei path outside registered prefixes rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "huawei unregistered host rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "rejected tc3 requests produced no signature",
+      "detail": "2"
+    },
+    {
+      "status": "PASS",
+      "name": "rejected huawei requests produced no signature",
+      "detail": "2"
+    }
+  ],
+  "summary": {
+    "total": 27,
+    "failed": 0
+  }
+}

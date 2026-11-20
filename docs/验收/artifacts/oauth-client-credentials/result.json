@@ -1,0 +1,157 @@
+{
+  "phase": "oauth-client-credentials",
+  "environment": {
+    "host": "Darwin arm64 / go1.25.5 / openssl 3.6.1",
+    "gateway": "127.0.0.1:50271",
+    "token_provider": "controlled fixture (tests/fixtures/oauthtoken) on loopback",
+    "upstream": "same fixture; only accepts its own Bearer tokens",
+    "credentials": "generated at runtime (client_secret, RSA service-account key)",
+    "note": "未接触真实服务商端点或密钥；GCP 真实 token_uri 未测。"
+  },
+  "checks": [
+    {
+      "status": "PASS",
+      "name": "client_credentials request through the gateway returns 200",
+      "detail": "200"
+    },
+    {
+      "status": "PASS",
+      "name": "upstream accepted the fixture-issued Bearer token",
+      "detail": "true"
+    },
+    {
+      "status": "PASS",
+      "name": "second client_credentials request returns 200",
+      "detail": "200"
+    },
+    {
+      "status": "PASS",
+      "name": "two gateway requests triggered exactly one token exchange",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "token endpoint saw HTTP Basic client authentication",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "upstream received the issued Bearer on both requests",
+      "detail": "2"
+    },
+    {
+      "status": "PASS",
+      "name": "the intermediary session token never reached the upstream",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "post-mode client_credentials request returns 200",
+      "detail": "200"
+    },
+    {
+      "status": "PASS",
+      "name": "token endpoint saw client credentials in the form body",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "jwt_bearer request through the gateway returns 200",
+      "detail": "200"
+    },
+    {
+      "status": "PASS",
+      "name": "fixture verified the RS256 assertion signature and claims",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "no assertion was rejected for a bad signature or claim",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "assertion with a foreign scope is rejected by the token endpoint",
+      "detail": "401"
+    },
+    {
+      "status": "PASS",
+      "name": "scope mismatch surfaces as UPSTREAM_AUTH_FAILED",
+      "detail": "UPSTREAM_AUTH_FAILED"
+    },
+    {
+      "status": "PASS",
+      "name": "fixture rejected the assertion on its claims",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "wrong client_secret returns 401",
+      "detail": "401"
+    },
+    {
+      "status": "PASS",
+      "name": "wrong client_secret surfaces as UPSTREAM_AUTH_FAILED",
+      "detail": "UPSTREAM_AUTH_FAILED"
+    },
+    {
+      "status": "PASS",
+      "name": "wrong client_secret is rejected on every attempt (failures are not cached)",
+      "detail": "2"
+    },
+    {
+      "status": "PASS",
+      "name": "gateway error body does not contain the client_secret",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "missing token_endpoint returns 503",
+      "detail": "503"
+    },
+    {
+      "status": "PASS",
+      "name": "missing token_endpoint surfaces as CREDENTIAL_UNAVAILABLE",
+      "detail": "CREDENTIAL_UNAVAILABLE"
+    },
+    {
+      "status": "PASS",
+      "name": "request after the cache window still returns 200",
+      "detail": "200"
+    },
+    {
+      "status": "PASS",
+      "name": "expired cached token is exchanged again exactly once",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "token endpoint 5xx returns 502",
+      "detail": "502"
+    },
+    {
+      "status": "PASS",
+      "name": "token endpoint 5xx surfaces as UPSTREAM_UNAVAILABLE",
+      "detail": "UPSTREAM_UNAVAILABLE"
+    },
+    {
+      "status": "PASS",
+      "name": "keykoid log contains no access token, client_secret or private key",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "keykoid log contains no signed JWT assertion",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "fixture never saw an intermediary session token",
+      "detail": "0"
+    }
+  ],
+  "summary": {
+    "total": 28,
+    "failed": 0
+  }
+}

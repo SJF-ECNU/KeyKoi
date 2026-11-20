@@ -1,0 +1,174 @@
+{
+  "phase": "biometric-signing",
+  "generated_at": "2026-11-19T17:19:23.582623+00:00",
+  "environment": {
+    "os": "macOS-27.0-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "macos_version": "27.0",
+    "macos_build": "26A5406e",
+    "xcode_select_p": "/Applications/Xcode.app/Contents/Developer",
+    "codesigning_identities": 1,
+    "identity_kind": "Apple Development",
+    "team_id": "977QNJU6V6",
+    "note": "签名身份的名称含 Apple ID，产物只记录类别与团队前缀；完整输出留在本次运行的临时目录。"
+  },
+  "signing": {
+    "script": "packaging/macos/sign-biometric.sh",
+    "exit_code": 0,
+    "identity": "Apple Development: <apple-id>",
+    "team": "977QNJU6V6",
+    "provision_profile": "absent",
+    "entitlements_keychain_access_groups": "yes",
+    "codesign_verify": "ok",
+    "signature_team": "977QNJU6V6",
+    "launch_probe": "blocked-by-amfi",
+    "deploy": "reverted",
+    "signed_artifact": {
+      "name": "keykoi-biometric.signed",
+      "sha256": "7dbbc03faa73c929b03d1889a6e0a49abada9e23394779f72fdcfdee6d90a737",
+      "bytes": 117824,
+      "note": "产物在本次运行的临时目录里，退出即删除；这里保留摘要作为可复核证据。"
+    },
+    "stderr_summary": [
+      "签名成功，但助手在启动探测里没有正常运行（blocked-by-amfi）。",
+      "原因：keychain-access-groups 属于受限权限，必须先由描述文件授权；",
+      "裸二进制的签名在没有对应描述文件时会被 AMFI 在启动阶段杀死。",
+      "处理方式：在 Xcode 里给 App ID 打开 Keychain Sharing 能力，用带描述文件的",
+      ".app 包分发助手，再重跑本脚本。"
+    ]
+  },
+  "summary": {
+    "total": 21,
+    "passed": 21,
+    "failed": 0
+  },
+  "checks": [
+    {
+      "name": "environment reports at least one codesigning identity",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "helper binary available for signing",
+      "status": "PASS",
+      "detail": "1"
+    },
+    {
+      "name": "sign script exits 0 with a real identity",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "script reports the signing identity",
+      "status": "PASS",
+      "detail": "contains 'identity:'"
+    },
+    {
+      "name": "script resolves a team id",
+      "status": "PASS",
+      "detail": "contains 'team:'"
+    },
+    {
+      "name": "keychain-access-groups is present in the signature",
+      "status": "PASS",
+      "detail": "contains 'entitlements_keychain_access_groups=yes'"
+    },
+    {
+      "name": "codesign --verify passes",
+      "status": "PASS",
+      "detail": "contains 'codesign_verify=ok'"
+    },
+    {
+      "name": "independent codesign dump has keychain-access-groups",
+      "status": "PASS",
+      "detail": "contains 'keychain-access-groups'"
+    },
+    {
+      "name": "entitlement group uses the certificate team id",
+      "status": "PASS",
+      "detail": "contains '<string>977QNJU6V6.'"
+    },
+    {
+      "name": "signature carries the certificate team id",
+      "status": "PASS",
+      "detail": "contains 'signature_team=977QNJU6V6'"
+    },
+    {
+      "name": "independent strict verify of the signed artifact",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "launch probe reports the AMFI block honestly",
+      "status": "PASS",
+      "detail": "blocked-by-amfi"
+    },
+    {
+      "name": "script explains the provisioning profile requirement",
+      "status": "PASS",
+      "detail": "contains '描述文件'"
+    },
+    {
+      "name": "script documents the revert of the unusable signature",
+      "status": "PASS",
+      "detail": "contains 'deploy=reverted'"
+    },
+    {
+      "name": "restored helper still answers available",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "simulated no-identity run exits 2",
+      "status": "PASS",
+      "detail": "2"
+    },
+    {
+      "name": "simulated run prints the Xcode guidance",
+      "status": "PASS",
+      "detail": "contains 'Xcode → Settings'"
+    },
+    {
+      "name": "simulated run prints the Keychain Sharing guidance",
+      "status": "PASS",
+      "detail": "contains 'Keychain Sharing'"
+    },
+    {
+      "name": "install.sh exposes KEYKOI_SIGN_BIOMETRIC",
+      "status": "PASS",
+      "detail": "contains 'KEYKOI_SIGN_BIOMETRIC'"
+    },
+    {
+      "name": "install.sh calls sign-biometric.sh",
+      "status": "PASS",
+      "detail": "contains 'sign-biometric.sh'"
+    },
+    {
+      "name": "go build ./... passes",
+      "status": "PASS",
+      "detail": "0"
+    }
+  ],
+  "manual_steps": [
+    "在 Xcode → Settings… → Accounts 用 Apple ID 登录，生成 Apple Development 证书（脚本无法代替登录）。",
+    "给 App ID 打开 Keychain Sharing 能力，导出描述文件；裸二进制不接受描述文件，需要 .app 包。",
+    "把带描述文件的签名助手装进 <prefix>/bin，并确认 `keykoi-biometric available` 能启动。",
+    "keykoi vault enroll-biometric  # 真机弹 Touch ID，需人工点指纹（manual）",
+    "keykoi unlock --biometric      # 再次人工确认指纹",
+    "keykoi auth status             # 期望 available=true enrolled=true"
+  ],
+  "notes": [
+    "本机有有效 Apple Development 身份时，脚本能完成签名并让签名里带上 keychain-access-groups；但缺少描述文件授权时系统会在启动阶段杀死该二进制（launch_probe=blocked-by-amfi），此时脚本回滚到签名前的产物，避免装上一个起不来的助手。",
+    "没有签名身份时脚本退出码 2 并打印 Xcode 登录、创建团队与 Keychain Sharing 的指引。",
+    "真实 Touch ID 登记必须在交互会话里人工确认，自动化只做不弹窗的判断。"
+  ],
+  "go": {
+    "build": "pass",
+    "build_output": ""
+  },
+  "commands": {
+    "rerun": "bash tests/acceptance/biometric-signing.sh",
+    "sign": "bash packaging/macos/sign-biometric.sh --helper <path>/keykoi-biometric",
+    "install_with_signing": "KEYKOI_SIGN_BIOMETRIC=1 bash packaging/macos/install.sh"
+  }
+}

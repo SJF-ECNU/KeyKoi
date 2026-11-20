@@ -1,0 +1,220 @@
+{
+  "phase": "biometric-app",
+  "generated_at": "2026-11-19T17:20:50.953050+00:00",
+  "exit_code": 0,
+  "mode": "automated",
+  "environment": {
+    "os": "macOS",
+    "macos_version": "27.0",
+    "xcode_select_p": "/Applications/Xcode.app/Contents/Developer",
+    "xcodebuild": "Xcode 27.1",
+    "codesigning_identities": 1,
+    "team_id": "977QNJU6V6",
+    "team_registered_in_xcode": true,
+    "note": "Apple ID 名称不写入产物；只记录团队前缀与身份数量。"
+  },
+  "build": {
+    "script": "packaging/macos/build-biometric-app.sh",
+    "exit_code": 0,
+    "failure_class": null,
+    "app": "/Users/shjf/work/keyKoi/packaging/macos/biometric-app/build/Build/Products/Release/KeyKoi Biometric.app",
+    "executable": "/Users/shjf/work/keyKoi/packaging/macos/biometric-app/build/Build/Products/Release/KeyKoi Biometric.app/Contents/MacOS/keykoi-biometric",
+    "bundle_id": "com.keykoi.biometric",
+    "signature_team": "977QNJU6V6",
+    "keychain_access_group": "977QNJU6V6.com.keykoi.biometric",
+    "entitlements_keychain_access_groups": "yes",
+    "codesign_verify": "ok",
+    "embedded_profile": "authorizes-keychain-access-groups",
+    "profile_uuid": "c482a923-4ff6-4ec8-adca-5e08180744e5",
+    "lsui_element": "yes",
+    "launch_probe": "ok"
+  },
+  "keychain_roundtrip": {
+    "account": "keykoi-acceptance-64795",
+    "result": "ok",
+    "gesture_note": "load 之前系统做过一次生物识别验证：本机在 5s 后返回同一密钥，没有出现需要人工点按的指纹对话框；弹出指纹框的机器上这一步仍算人工操作，超时会记成 MANUAL。"
+  },
+  "summary": {
+    "total": 31,
+    "passed": 31,
+    "failed": 0,
+    "manual": 0
+  },
+  "checks": [
+    {
+      "name": "running on macOS",
+      "status": "PASS",
+      "detail": "Darwin"
+    },
+    {
+      "name": "构建脚本退出码为 0",
+      "status": "PASS",
+      "detail": "exit=0"
+    },
+    {
+      "name": "构建脚本输出 launch_probe=ok",
+      "status": "PASS",
+      "detail": "contains 'launch_probe=ok'"
+    },
+    {
+      "name": "构建脚本输出 keychain-access-groups 校验",
+      "status": "PASS",
+      "detail": "contains 'entitlements_keychain_access_groups=yes'"
+    },
+    {
+      "name": "构建脚本输出 codesign 校验通过",
+      "status": "PASS",
+      "detail": "contains 'codesign_verify=ok'"
+    },
+    {
+      "name": "构建脚本给出给 keykoi 用的可执行文件路径",
+      "status": "PASS",
+      "detail": "contains 'KEYKOI_BIOMETRIC_HELPER='"
+    },
+    {
+      "name": "包名是 KeyKoi Biometric.app",
+      "status": "PASS",
+      "detail": "KeyKoi Biometric.app"
+    },
+    {
+      "name": "可执行文件位于 Contents/MacOS/keykoi-biometric",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "存在 embedded.provisionprofile",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "Info.plist 设置 CFBundleIdentifier",
+      "status": "PASS",
+      "detail": "contains 'com.keykoi.biometric'"
+    },
+    {
+      "name": "Info.plist 设置 CFBundleExecutable",
+      "status": "PASS",
+      "detail": "contains '\"CFBundleExecutable\" => \"keykoi-biometric\"'"
+    },
+    {
+      "name": "Info.plist 设置 LSUIElement",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "codesign --verify --strict 通过",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "签名里含 keychain-access-groups",
+      "status": "PASS",
+      "detail": "contains 'keychain-access-groups'"
+    },
+    {
+      "name": "权限里的访问组带团队前缀",
+      "status": "PASS",
+      "detail": "contains '977QNJU6V6.com.keykoi.biometric'"
+    },
+    {
+      "name": "签名团队 ID 匹配",
+      "status": "PASS",
+      "detail": "977QNJU6V6"
+    },
+    {
+      "name": "描述文件授权 keychain-access-groups",
+      "status": "PASS",
+      "detail": "contains 'keychain-access-groups'"
+    },
+    {
+      "name": "描述文件属于同一团队",
+      "status": "PASS",
+      "detail": "contains '977QNJU6V6'"
+    },
+    {
+      "name": "助手的 available 退出码为 0",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "助手的 available 输出 available",
+      "status": "PASS",
+      "detail": "available"
+    },
+    {
+      "name": "store 写入测试根密钥",
+      "status": "PASS",
+      "detail": "exit=0"
+    },
+    {
+      "name": "load 取回同一测试根密钥",
+      "status": "PASS",
+      "detail": "exit=0, 5s"
+    },
+    {
+      "name": "delete 清理测试条目",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "go build ./cmd/keykoid ./cmd/keykoi 通过",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "keykoid 用环境变量里的 .app 助手启动",
+      "status": "PASS",
+      "detail": "socket=/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T//keykoi-biometric-app.lcDfO1/keykoid.sock"
+    },
+    {
+      "name": "keykoid 日志确认助手路径指向 .app 包",
+      "status": "PASS",
+      "detail": "contains 'KeyKoi Biometric.app/Contents/MacOS/keykoi-biometric'"
+    },
+    {
+      "name": "keykoi init 经该助手初始化密钥库",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "keykoi vault enroll-biometric 成功",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "keykoi auth status 经该助手报告可用",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "auth status 显示 available=true",
+      "status": "PASS",
+      "detail": "contains 'available=true'"
+    },
+    {
+      "name": "internal/vault 助手路径解析测试通过",
+      "status": "PASS",
+      "detail": "0"
+    }
+  ],
+  "manual_steps": [
+    "Xcode → Settings… → Accounts 用 Apple ID 登录，并确认团队 977QNJU6V6 可用（脚本无法代替登录）。",
+    "developer.apple.com → Identifiers → com.keykoi.biometric 勾选 Keychain Sharing；免费 Personal Team 若不支持，需要付费团队。",
+    "bash packaging/macos/build-biometric-app.sh --install-dir \"$HOME/Library/Application Support/KeyKoi/bin\"",
+    "export KEYKOI_BIOMETRIC_HELPER=\"<安装目录>/KeyKoi Biometric.app/Contents/MacOS/keykoi-biometric\" 后重启 keykoid。",
+    "keykoi vault enroll-biometric  # 首次登记后 keykoi unlock --biometric 可跳过主密码",
+    "在真机上人工确认一次 Touch ID 手势（自动化无法代替手指）。"
+  ],
+  "notes": [
+    "生物识别 ACL 需要 keychain-access-groups，而裸二进制即使签名也会被 AMFI 在启动阶段杀死；这里改为 Xcode 工程产出的已签名 .app，描述文件随包嵌入，keykoid 直接执行 Contents/MacOS/keykoi-biometric。",
+    "工程文件由 packaging/macos/biometric-app/Tools/generate-xcodeproj.py 确定性生成（本机没有 xcodegen），同目录的 project.yml 供装了 xcodegen 的机器对照。",
+    "自动签名使用 xcodebuild -allowProvisioningUpdates，由 Xcode 登录的 Apple ID 团队生成 Mac Team Provisioning Profile；证书与描述文件都由 Xcode 管理，仓库里不放描述文件。",
+    "store 只创建 ACL 条目，不需要手势；load 会触发一次系统生物识别验证，本机实测多次都在 5~25 秒内返回正确密钥，未出现需要人工点按的指纹对话框。若目标机器弹出指纹提示，load 往返会超时（142）或返回退出码 3，脚本把它记为 MANUAL 而不是失败。"
+  ],
+  "commands": {
+    "rerun": "bash tests/acceptance/biometric-app.sh",
+    "build": "bash packaging/macos/build-biometric-app.sh",
+    "build_and_install": "bash packaging/macos/build-biometric-app.sh --install-dir \"$HOME/Library/Application Support/KeyKoi/bin\"",
+    "export_helper": "export KEYKOI_BIOMETRIC_HELPER=\"<app>/Contents/MacOS/keykoi-biometric\""
+  }
+}

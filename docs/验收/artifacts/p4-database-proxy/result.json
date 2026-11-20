@@ -1,0 +1,123 @@
+{
+  "phase": "p4-database-proxy",
+  "environment": {
+    "os": "macOS 27.0",
+    "arch": "arm64",
+    "client_driver": "psql (PostgreSQL) 18.6 (Homebrew)",
+    "upstream_server": "PostgreSQL 18.6 (Homebrew)",
+    "upstream_ssl": "off",
+    "upstream_password_encryption": "scram-sha-256",
+    "upstream_role_auth": "scram-sha-256",
+    "proxy_upstream_sslmode": "disable for the plaintext checks; require + --upstream-ca for the TLS section",
+    "upstream_tls_evidence": "upstream TLS active (TLSv1.3); certificate verified against a private CA"
+  },
+  "protocol": {
+    "client_auth": "AuthenticationCleartextPassword carrying the KeyKoi session token (loopback only)",
+    "client_user": "keykoi",
+    "upstream_auth": [
+      "scram-sha-256",
+      "md5",
+      "cleartext"
+    ],
+    "upstream_tls": "sslmode=disable|prefer|require; prefer/require verify certificate chain and hostname, optional --upstream-ca",
+    "lifecycle": [
+      "CancelRequest forwarding",
+      "connection close",
+      "SQLSTATE error frames"
+    ],
+    "unsupported": [
+      "client-side TLS (SSLRequest answered with 'N')",
+      "SCRAM-SHA-256-PLUS channel binding",
+      "SQL parsing, statement/table level authorization or read-only enforcement",
+      "connection pooling or multiplexing across clients",
+      "replication protocol and logical decoding streams"
+    ]
+  },
+  "database": {
+    "role": "keykoi_test",
+    "database": "keykoi_test",
+    "password": "generated at runtime, never written to disk, logs or this report",
+    "kept_after_run": false
+  },
+  "checks": [
+    {
+      "status": "PASS",
+      "name": "upstream role uses scram-sha-256",
+      "detail": "scram-sha-256"
+    },
+    {
+      "status": "PASS",
+      "name": "psql select 1 through proxy",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "upstream identity is the registered database user",
+      "detail": "keykoi_test|keykoi_test"
+    },
+    {
+      "status": "PASS",
+      "name": "proxied query reaches PostgreSQL 18",
+      "detail": "18"
+    },
+    {
+      "status": "PASS",
+      "name": "direct role login with real database password",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "pgx extended-protocol query through proxy",
+      "detail": "42"
+    },
+    {
+      "status": "PASS",
+      "name": "wrong session token rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "binding without runtime_delivery grant rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "client-side TLS reported as unsupported",
+      "detail": "unsupported"
+    },
+    {
+      "status": "PASS",
+      "name": "cancel request forwarded to upstream",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "no upstream session left open after client close",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "database password never printed to logs",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "upstream TLS verified with private CA",
+      "detail": "t"
+    },
+    {
+      "status": "PASS",
+      "name": "upstream TLS without trusted CA rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "test role and database removed",
+      "detail": "0"
+    }
+  ],
+  "summary": {
+    "total": 15,
+    "failed": 0
+  }
+}

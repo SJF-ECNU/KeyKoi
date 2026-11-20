@@ -1,0 +1,229 @@
+{
+  "phase": "db-auth-proxies",
+  "environment": {
+    "redis_server": "8.6.0",
+    "mysql_client": "/opt/homebrew/opt/mysql-client/bin/mysql  Ver 26.10.0 for macos27.0 on arm64 (Homebrew)",
+    "mysql_upstream": "8.4.13",
+    "mysql_native_upstream": "supported",
+    "mongo_upstream": "7.0.48",
+    "docker_images": "mirror.gcr.io/library/mysql:8 / mysql:8.0 / mongo:7 (override with MYSQL_IMAGE/MYSQL80_IMAGE/MONGO_IMAGE)",
+    "kept_after_run": false
+  },
+  "protocols": {
+    "redis": {
+      "status": "supported",
+      "client_auth": "AUTH <session-token> / AUTH <user> <session-token>, terminated by the proxy",
+      "upstream_auth": [
+        "AUTH password (requirepass)",
+        "AUTH user password (Redis 6+ ACL)"
+      ],
+      "forwarding": "RESP2/RESP3 messages forwarded verbatim; re-AUTH rewrites the password slot to the real secret",
+      "unsupported": [
+        "client-side and upstream TLS",
+        "cluster redirection routing"
+      ]
+    },
+    "mysql": {
+      "status": "supported",
+      "client_auth": "caching_sha2_password full authentication; session token arrives over client-side TLS or RSA-encrypted",
+      "upstream_auth": [
+        "mysql_native_password",
+        "caching_sha2_password (fast path + full auth via RSA public key)"
+      ],
+      "forwarding": "binary relay after authentication; result sets, ERR and COM_QUIT untouched",
+      "unsupported": [
+        "upstream TLS",
+        "COM_CHANGE_USER re-authentication",
+        "result-set rewriting"
+      ]
+    },
+    "mongo": {
+      "status": "supported",
+      "client_auth": "SASL PLAIN (mongosh --authenticationMechanism PLAIN, authSource=$external)",
+      "upstream_auth": [
+        "SCRAM-SHA-256 (full client implementation with server signature verification)"
+      ],
+      "forwarding": "OP_MSG relay after authentication; legacy OP_QUERY handshake answered with OP_REPLY",
+      "unsupported": [
+        "client-side SCRAM-SHA-256/SCRAM-SHA-1 termination: the proxy does not hold the token plaintext, so it cannot verify the client proof; faking it would accept any password, so SCRAM is rejected explicitly instead",
+        "OP_COMPRESSED, client TLS, X.509 client certificates"
+      ],
+      "not_implemented": [
+        "client-side SCRAM-SHA-256"
+      ]
+    }
+  },
+  "checks": [
+    {
+      "status": "PASS",
+      "name": "redis SET through proxy",
+      "detail": "OK"
+    },
+    {
+      "status": "PASS",
+      "name": "redis GET through proxy",
+      "detail": "hello"
+    },
+    {
+      "status": "PASS",
+      "name": "redis PING through proxy",
+      "detail": "PONG"
+    },
+    {
+      "status": "PASS",
+      "name": "redis SELECT through proxy",
+      "detail": "OK"
+    },
+    {
+      "status": "PASS",
+      "name": "redis INFO reaches the real upstream",
+      "detail": "8.6.0"
+    },
+    {
+      "status": "PASS",
+      "name": "redis wrong session token rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "redis binding without runtime_delivery rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "redis wrong upstream password rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "redis upstream sessions released after client close",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "redis secrets absent from logs",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "mysql upstream user uses caching_sha2_password",
+      "detail": "caching_sha2_password"
+    },
+    {
+      "status": "PASS",
+      "name": "mysql select 1 through proxy (TLS, default ssl-mode)",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "mysql upstream identity is the registered user",
+      "detail": "kkuser@%"
+    },
+    {
+      "status": "PASS",
+      "name": "mysql proxied query reaches the real server",
+      "detail": "8.4.13"
+    },
+    {
+      "status": "PASS",
+      "name": "mysql plaintext client with RSA public key",
+      "detail": "2"
+    },
+    {
+      "status": "PASS",
+      "name": "mysql client-side TLS enforced by --ssl-mode=REQUIRED",
+      "detail": "5"
+    },
+    {
+      "status": "PASS",
+      "name": "mysql proxy log records a client-side TLS session",
+      "detail": "yes"
+    },
+    {
+      "status": "PASS",
+      "name": "mysql wrong session token rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "mysql binding without runtime_delivery rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "mysql wrong upstream password rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "mysql upstream sessions released after client close",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "mysql secrets absent from logs",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "mysql upstream mysql_native_password authentication",
+      "detail": "4"
+    },
+    {
+      "status": "PASS",
+      "name": "mongo ping through proxy (SASL PLAIN)",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "mongo proxied command reaches the real server",
+      "detail": "7.0.48"
+    },
+    {
+      "status": "PASS",
+      "name": "mongo write/read through proxy",
+      "detail": "42"
+    },
+    {
+      "status": "PASS",
+      "name": "mongo upstream sessions released after client close",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "mongo wrong session token rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "mongo client-side SCRAM rejected with an explicit reason",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "mongo binding without runtime_delivery rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "mongo wrong upstream password rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "mongo secrets absent from logs",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "temporary database containers removed",
+      "detail": "0"
+    }
+  ],
+  "summary": {
+    "total": 33,
+    "failed": 0,
+    "skipped": 0,
+    "passed": 33
+  }
+}

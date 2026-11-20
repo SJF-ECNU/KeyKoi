@@ -1,0 +1,556 @@
+{
+  "phase": "biometric-renewal",
+  "generated_at": "2026-11-19T17:30:36.185989+00:00",
+  "exit_code": 0,
+  "mode": "automated",
+  "environment": {
+    "os": "macOS",
+    "macos_version": "27.0",
+    "xcode_select_p": "/Applications/Xcode.app/Contents/Developer",
+    "xcodebuild": "Xcode 27.1",
+    "team_id": "977QNJU6V6",
+    "temp_prefix": "/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T//keykoi-biometric-renewal.Fi5FJ1/prefix",
+    "note": "验收全部在临时 prefix / 临时 HOME / 一次性 LaunchAgent 标签下执行；Apple ID 名称不写入产物。"
+  },
+  "deployment": {
+    "script": "packaging/macos/install-biometric-app.sh",
+    "app": "/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T//keykoi-biometric-renewal.Fi5FJ1/prefix/KeyKoi Biometric.app",
+    "app_exists": "yes",
+    "helper": "/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T//keykoi-biometric-renewal.Fi5FJ1/prefix/KeyKoi Biometric.app/Contents/MacOS/keykoi-biometric",
+    "helper_env": "KEYKOI_BIOMETRIC_HELPER=/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T//keykoi-biometric-renewal.Fi5FJ1/prefix/KeyKoi Biometric.app/Contents/MacOS/keykoi-biometric",
+    "profile_expiry": "2026-11-26T17:13:46Z",
+    "profile_expiry_epoch": 1795713226,
+    "remaining_seconds": 603810,
+    "remaining_days": 7.0,
+    "signature_team": "977QNJU6V6",
+    "codesign_verify": "ok",
+    "entitlements_keychain_access_groups": "yes",
+    "min_days": 2.0,
+    "renew_needed": "no"
+  },
+  "renewal": {
+    "threshold_days": 2.0,
+    "forced_expiry_check": {
+      "build_exit": 0,
+      "deployed_app": "/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T//keykoi-biometric-renewal.Fi5FJ1/prefix/KeyKoi Biometric.app",
+      "result": "ok",
+      "note": "模拟临期（--force-expiry-check）：即使描述文件仍有 7 天也重建了一次。"
+    },
+    "missing_profile": {
+      "status_exit_expected": 2,
+      "detected_renew_needed": "yes",
+      "detected_reason": "profile-missing",
+      "rebuilt": true,
+      "reissued_profile_expiry": "2026-11-26T17:13:46Z",
+      "result": "ok",
+      "note": "删掉已部署 .app 的 embedded.provisionprofile，验证 --build-if-needed 真的重新构建并重新签发。"
+    },
+    "build_failure": {
+      "result": "manual",
+      "rendered_manual_hint": true
+    }
+  },
+  "install_sh": {
+    "plist": "/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T//keykoi-biometric-renewal.Fi5FJ1/home/Library/LaunchAgents/com.keykoi.keykoid.acceptance-renewal-73654.plist",
+    "label": "com.keykoi.keykoid.acceptance-renewal-73654",
+    "helper_env_in_plist": "/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T//keykoi-biometric-renewal.Fi5FJ1/install-prefix/KeyKoi Biometric.app/Contents/MacOS/keykoi-biometric",
+    "launch_agents_dir_redirected_to_temp_home": true
+  },
+  "launch_agent": {
+    "label": "com.keykoi.biometric-renew.acceptance-73654",
+    "plist": "/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T//keykoi-biometric-renewal.Fi5FJ1/renew-plist.snapshot",
+    "program_arguments": [
+      "/bin/bash",
+      "/Users/shjf/work/keyKoi/packaging/macos/install-biometric-app.sh",
+      "--build-if-needed",
+      "--prefix",
+      "/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T//keykoi-biometric-renewal.Fi5FJ1/prefix",
+      "--team",
+      "977QNJU6V6"
+    ],
+    "schedule": {
+      "Weekday": 1,
+      "Hour": 3,
+      "Minute": 17
+    },
+    "environment_keys": [
+      "DEVELOPER_DIR",
+      "HOME",
+      "KEYKOI_DEV_TEAM",
+      "KEYKOI_PREFIX",
+      "PATH"
+    ],
+    "environment_home": "/Users/shjf",
+    "environment_developer_dir": "/Applications/Xcode.app/Contents/Developer",
+    "standard_out_path": "/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T//keykoi-biometric-renewal.Fi5FJ1/prefix/data/biometric-renew.log",
+    "loaded": "yes",
+    "run_now": {
+      "result": "ok",
+      "kickstart": "ok"
+    },
+    "log": "/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T//keykoi-biometric-renewal.Fi5FJ1/prefix/data/biometric-renew.log",
+    "log_has_marker": true,
+    "note": "调度是每周一次；验收只检查 plist 语义 + 一次 launchctl kickstart，不等待一周。"
+  },
+  "summary": {
+    "total": 86,
+    "passed": 86,
+    "failed": 0,
+    "manual": 0
+  },
+  "checks": [
+    {
+      "name": "running on macOS",
+      "status": "PASS",
+      "detail": "Darwin"
+    },
+    {
+      "name": "install-biometric-app.sh 存在可执行",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "install-biometric-renew.sh 存在可执行",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "空 prefix 首次构建+部署退出码",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "首次运行打印构建退出码 0",
+      "status": "PASS",
+      "detail": "contains 'build_exit=0'"
+    },
+    {
+      "name": "首次运行报告已部署",
+      "status": "PASS",
+      "detail": "contains 'deployed_app=/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T//keykoi-biometric-renewal.Fi5FJ1/prefix/KeyKoi Biometric.app'"
+    },
+    {
+      "name": "首次运行报告 install_biometric_app=ok",
+      "status": "PASS",
+      "detail": "contains 'install_biometric_app=ok'"
+    },
+    {
+      "name": ".app 已落到 prefix",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "--status 退出码（有效期内为 0）",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "--status 输出描述文件到期时间",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "--status 输出剩余天数（>0）",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "--status 输出签名团队",
+      "status": "PASS",
+      "detail": "977QNJU6V6"
+    },
+    {
+      "name": "--status 报告已部署 app 存在",
+      "status": "PASS",
+      "detail": "contains 'app_exists=yes'"
+    },
+    {
+      "name": "--status 报告 codesign 通过",
+      "status": "PASS",
+      "detail": "contains 'codesign_verify=ok'"
+    },
+    {
+      "name": "--status 报告 entitlements 含 keychain-access-groups",
+      "status": "PASS",
+      "detail": "contains 'entitlements_keychain_access_groups=yes'"
+    },
+    {
+      "name": "--status 报告无需续签",
+      "status": "PASS",
+      "detail": "contains 'renew_needed=no'"
+    },
+    {
+      "name": "第二次 --build-if-needed 退出码",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "新鲜时不重建（没有 build_exit）",
+      "status": "PASS",
+      "detail": "absent 'build_exit='"
+    },
+    {
+      "name": "新鲜时日志说明跳过构建",
+      "status": "PASS",
+      "detail": "contains '跳过构建'"
+    },
+    {
+      "name": "--force-expiry-check 退出码",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "临期模拟触发真实构建",
+      "status": "PASS",
+      "detail": "contains 'build_exit=0'"
+    },
+    {
+      "name": "临期模拟后重新部署",
+      "status": "PASS",
+      "detail": "contains 'deployed_app=/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T//keykoi-biometric-renewal.Fi5FJ1/prefix/KeyKoi Biometric.app'"
+    },
+    {
+      "name": "临期模拟结果 ok",
+      "status": "PASS",
+      "detail": "contains 'install_biometric_app=ok'"
+    },
+    {
+      "name": "缺描述文件时 --status 退出码为 2",
+      "status": "PASS",
+      "detail": "2"
+    },
+    {
+      "name": "缺描述文件时报告 profile_expiry=none",
+      "status": "PASS",
+      "detail": "contains 'profile_expiry=none'"
+    },
+    {
+      "name": "缺描述文件时 renew_reason=profile-missing",
+      "status": "PASS",
+      "detail": "contains 'renew_reason=profile-missing'"
+    },
+    {
+      "name": "缺描述文件时 --build-if-needed 退出码",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "缺描述文件时触发重建",
+      "status": "PASS",
+      "detail": "contains 'build_exit=0'"
+    },
+    {
+      "name": "重建后描述文件回到 .app 内",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "重新签发后 --status 恢复为 0",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "重新签发的描述文件有到期时间",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "重新签发的描述文件时限在原值之后",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "部署后的 .app 通过 codesign --verify --strict",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "签名含 keychain-access-groups",
+      "status": "PASS",
+      "detail": "contains 'keychain-access-groups'"
+    },
+    {
+      "name": "助手可执行文件存在",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "构建失败时退出码为 2（需要人工）",
+      "status": "PASS",
+      "detail": "2"
+    },
+    {
+      "name": "构建失败时报告 manual",
+      "status": "PASS",
+      "detail": "contains 'install_biometric_app=manual'"
+    },
+    {
+      "name": "构建失败时打印 manual 指引",
+      "status": "PASS",
+      "detail": "contains 'manual:'"
+    },
+    {
+      "name": "manual 指引给出重建命令",
+      "status": "PASS",
+      "detail": "contains '--build-if-needed'"
+    },
+    {
+      "name": "构建失败不影响已部署的 .app",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "install.sh 退出码",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "install.sh 部署了 .app",
+      "status": "PASS",
+      "detail": "contains 'installed KeyKoi Biometric.app'"
+    },
+    {
+      "name": "install.sh 后 .app 存在",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "install.sh 部署的 .app 通过 codesign 校验",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "install.sh 写出 launchd plist",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "keykoid plist 通过 plutil -lint",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "plist 里 KEYKOI_BIOMETRIC_HELPER 指向 .app 内助手",
+      "status": "PASS",
+      "detail": "/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T//keykoi-biometric-renewal.Fi5FJ1/install-prefix/KeyKoi Biometric.app/Contents/MacOS/keykoi-biometric"
+    },
+    {
+      "name": "plist 的 ProgramArguments 仍指向 keykoid",
+      "status": "PASS",
+      "detail": "contains '/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T//keykoi-biometric-renewal.Fi5FJ1/install-prefix/bin/keykoid'"
+    },
+    {
+      "name": "KEYKOI_BIOMETRIC_APP=0 时 install.sh 退出码",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "KEYKOI_BIOMETRIC_APP=0 时不部署 .app",
+      "status": "PASS",
+      "detail": "no"
+    },
+    {
+      "name": "关闭时 plist 仍然合法",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "关闭时 plist 不含 KEYKOI_BIOMETRIC_HELPER",
+      "status": "PASS",
+      "detail": "absent 'KEYKOI_BIOMETRIC_HELPER'"
+    },
+    {
+      "name": "续签代理安装退出码",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "续签 plist 已生成",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "续签 plist 通过 plutil -lint",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "续签 plist 写入每周调度 StartCalendarInterval",
+      "status": "PASS",
+      "detail": "contains 'StartCalendarInterval'"
+    },
+    {
+      "name": "续签调度为每周一次（Weekday 1）",
+      "status": "PASS",
+      "detail": "1"
+    },
+    {
+      "name": "续签命令是 install-biometric-app.sh --build-if-needed",
+      "status": "PASS",
+      "detail": "contains '--build-if-needed'"
+    },
+    {
+      "name": "续签命令指向 install-biometric-app.sh",
+      "status": "PASS",
+      "detail": "contains 'install-biometric-app.sh'"
+    },
+    {
+      "name": "launchd 环境显式提供真实 HOME",
+      "status": "PASS",
+      "detail": "/Users/shjf"
+    },
+    {
+      "name": "launchd 环境显式提供 DEVELOPER_DIR",
+      "status": "PASS",
+      "detail": "/Applications/Xcode.app/Contents/Developer"
+    },
+    {
+      "name": "launchd 环境 PATH 含 Xcode 的 usr/bin",
+      "status": "PASS",
+      "detail": "contains '/Applications/Xcode.app/Contents/Developer/usr/bin'"
+    },
+    {
+      "name": "续签日志路径在 <prefix>/data 下",
+      "status": "PASS",
+      "detail": "/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T//keykoi-biometric-renewal.Fi5FJ1/prefix/data/biometric-renew.log"
+    },
+    {
+      "name": "续签代理已加载",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "--run-now 退出码",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "--run-now 触发 kickstart",
+      "status": "PASS",
+      "detail": "contains 'kickstart=ok'"
+    },
+    {
+      "name": "--run-now 在 launchd 环境跑完并返回 ok",
+      "status": "PASS",
+      "detail": "contains 'run_result=ok'"
+    },
+    {
+      "name": "续签日志文件已写入",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "续签日志含 install_biometric_app 收尾标记",
+      "status": "PASS",
+      "detail": "contains 'install_biometric_app=ok'"
+    },
+    {
+      "name": "launchd 里完成真实构建（xcodebuild 自动签名）",
+      "status": "PASS",
+      "detail": "contains 'build_exit=0'"
+    },
+    {
+      "name": "launchd 里把新 .app 部署到 prefix",
+      "status": "PASS",
+      "detail": "contains 'deployed_app=/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T//keykoi-biometric-renewal.Fi5FJ1/prefix/KeyKoi Biometric.app'"
+    },
+    {
+      "name": "launchd 里能读到描述文件到期时间",
+      "status": "PASS",
+      "detail": "contains 'profile_expiry='"
+    },
+    {
+      "name": "launchd 里报告剩余天数",
+      "status": "PASS",
+      "detail": "contains 'remaining_days='"
+    },
+    {
+      "name": "launchd 里签名团队正确",
+      "status": "PASS",
+      "detail": "contains 'signature_team=977QNJU6V6'"
+    },
+    {
+      "name": "launchd 重建后 .app 内描述文件回来了",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "--status 报告已加载",
+      "status": "PASS",
+      "detail": "contains 'loaded=yes'"
+    },
+    {
+      "name": "卸载退出码",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "卸载后代理不再加载",
+      "status": "PASS",
+      "detail": "no"
+    },
+    {
+      "name": "卸载后 plist 已删除",
+      "status": "PASS",
+      "detail": "no"
+    },
+    {
+      "name": "卸载后日志保留",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "续签相关脚本没有调用 store/load/delete 或 security 条目命令",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "文档说明不触碰 Keychain",
+      "status": "PASS",
+      "detail": "contains '不调用'"
+    },
+    {
+      "name": "续签文档存在",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "文档记录付费开发者账号（1 年）方案",
+      "status": "PASS",
+      "detail": "contains '1 年'"
+    },
+    {
+      "name": "文档记录 -allowProvisioningUpdates 自动续期",
+      "status": "PASS",
+      "detail": "contains '-allowProvisioningUpdates'"
+    },
+    {
+      "name": "文档记录 LAContext 弱化方案的安全代价",
+      "status": "PASS",
+      "detail": "contains 'LAContext'"
+    }
+  ],
+  "manual_steps": [
+    "真实 Touch ID 手势（enroll 与 unlock 各一次）仍需人工在会弹指纹框的机器上点按；本次验收只覆盖部署、续签与签名校验。",
+    "如需把到期时间真正推进到新的 7 天窗口，请在描述文件已过期或即将过期时执行：bash packaging/macos/install-biometric-app.sh --build-if-needed（Xcode 需已登录且能访问 developer.apple.com）。",
+    "每周自动续签已安装到用户 LaunchAgents 时可长期运行：bash packaging/macos/install-biometric-renew.sh --install；验收用的是带 PID 后缀的一次性标签。"
+  ],
+  "notes": [
+    "免费 Apple ID（Personal Team）签发的 Mac Team Provisioning Profile 只有 7 天有效期，过期后 AMFI 拒绝启动带 keychain-access-groups 的助手；续签只能重新签发，不能给已有描述文件延期。",
+    "描述文件仍在有效期内时，Xcode 会复用已有描述文件，重建不会提前推进 ExpirationDate（本次实测重建前后都是同一个到期时间）；只有过期或缺失时才会拿到新的 7 天窗口，所以验收用「删除 embedded.provisionprofile」来验证重新签发。",
+    "install-biometric-app.sh 用 security cms -D -i 读出 embedded.provisionprofile 的 ExpirationDate，剩余 <2 天（KEYKOI_BIOMETRIC_RENEW_DAYS 可调）或缺失时才重建，避免每次安装都联网重签。",
+    "验收用 --force-expiry-check 模拟临期、用删除 embedded.provisionprofile 模拟描述文件缺失，两者都触发真实 xcodebuild 重建，不实际等待 7 天。",
+    "LaunchAgent 用 StartCalendarInterval 每周触发一次；launchd 不加载 shell 启动文件，所以 plist 显式写入 HOME / PATH / DEVELOPER_DIR / KEYKOI_DEV_TEAM，xcodebuild -allowProvisioningUpdates 才能读到登录钥匙串里的 Apple Development 身份。",
+    "所有构建、部署、LaunchAgent 都在临时 prefix（/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T//keykoi-biometric-renewal.Fi5FJ1/prefix）与临时 HOME 下进行，LaunchAgent 标签带验收 PID 后缀，结束时 bootout 并清理。",
+    "install-biometric-app.sh 不调用助手的 store/load/delete，验收断言脚本里没有这些子命令调用，即不触碰用户 Keychain 条目。"
+  ],
+  "commands": {
+    "rerun": "bash tests/acceptance/biometric-renewal.sh",
+    "status": "bash packaging/macos/install-biometric-app.sh --status",
+    "build_if_needed": "bash packaging/macos/install-biometric-app.sh --build-if-needed",
+    "install_renew": "bash packaging/macos/install-biometric-renew.sh --install",
+    "renew_run_now": "bash packaging/macos/install-biometric-renew.sh --run-now",
+    "renew_log": "tail -f \"<prefix>/data/biometric-renew.log\"",
+    "uninstall_renew": "bash packaging/macos/install-biometric-renew.sh --uninstall"
+  }
+}

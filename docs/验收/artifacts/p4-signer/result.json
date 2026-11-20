@@ -1,0 +1,202 @@
+{
+  "phase": "p4-signer",
+  "protocol": {
+    "id": "aws-sigv4",
+    "algorithm": "AWS4-HMAC-SHA256",
+    "methods": [
+      "GET",
+      "HEAD",
+      "POST",
+      "PUT",
+      "DELETE",
+      "PATCH",
+      "OPTIONS"
+    ],
+    "signed_headers": [
+      "host",
+      "x-amz-date",
+      "x-amz-content-sha256 (s3)",
+      "x-amz-security-token",
+      "whitelisted caller headers"
+    ],
+    "payload_modes": {
+      "single_complete_sha256": true,
+      "chunked_or_streaming": false,
+      "unsigned_payload": false
+    },
+    "presigned_urls": {
+      "supported": false,
+      "aws_cli_query_params": [
+        "X-Amz-Algorithm",
+        "X-Amz-Credential",
+        "X-Amz-Date",
+        "X-Amz-Expires",
+        "X-Amz-Security-Token",
+        "X-Amz-Signature",
+        "X-Amz-SignedHeaders"
+      ],
+      "uses_query_signature": true,
+      "reason": "aws-sigv4 签名器只返回请求头签名；预签名 URL 会以查询串授予临时访问，超出 sign 许可边界。"
+    },
+    "credential": "access_key_pair: access_id/access_secret/session_token，要求同一版本字段完整；adapter_id 形如 aws-sigv4/<region>/<service>",
+    "session_token_delivery": "X-Amz-Security-Token 作为 AWS 要求的签名头返回给调用方；只写 0600 文件或 stdout，不进日志与验收产物。",
+    "logging": "签名材料不写入日志或审计；access_secret 不出签名器，响应只含签名头与许可元数据。"
+  },
+  "environment": {
+    "os": "macOS 27.0",
+    "arch": "arm64",
+    "go": "go version go1.25.5 darwin/arm64",
+    "aws_cli": "aws-cli/2.41.0 Python/3.15.2 Darwin/27.0.0 source/arm64",
+    "upstream": "tests/fixtures/sigv4verify (independent SigV4 recomputation, no credential persistence)",
+    "upstream_addr": "http://127.0.0.1:49885"
+  },
+  "comparisons": {
+    "signature_structure_match": true,
+    "required_headers": [
+      "host",
+      "x-amz-content-sha256",
+      "x-amz-date",
+      "x-amz-security-token"
+    ],
+    "keykoi": {
+      "algorithm": "AWS4-HMAC-SHA256",
+      "credential_scope": "20261120/us-east-1/s3/aws4_request",
+      "signed_headers": [
+        "host",
+        "x-amz-content-sha256",
+        "x-amz-date",
+        "x-amz-security-token"
+      ],
+      "signature_length": 64
+    },
+    "aws_cli": {
+      "algorithm": "AWS4-HMAC-SHA256",
+      "credential_scope": "20261120/us-east-1/s3/aws4_request",
+      "signed_headers": [
+        "host",
+        "x-amz-content-sha256",
+        "x-amz-date",
+        "x-amz-security-token"
+      ],
+      "signature_length": 64
+    },
+    "signed_headers_identical": true,
+    "verified_by_agent": {
+      "aws-cli": 1,
+      "keykoi": 3
+    },
+    "upstream_verified": 4,
+    "upstream_failed": 0
+  },
+  "checks": [
+    {
+      "status": "PASS",
+      "name": "AWS SigV4 standard vectors (go test ./internal/signer)",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "signature headers emitted",
+      "detail": "ok"
+    },
+    {
+      "status": "PASS",
+      "name": "access_secret absent from emitted headers",
+      "detail": "absent"
+    },
+    {
+      "status": "PASS",
+      "name": "controlled upstream verifies signature",
+      "detail": "true"
+    },
+    {
+      "status": "PASS",
+      "name": "duplicate query preserved and sorted",
+      "detail": "versionId=1&versionId=2"
+    },
+    {
+      "status": "PASS",
+      "name": "large request signature verified",
+      "detail": "true"
+    },
+    {
+      "status": "PASS",
+      "name": "unregistered host rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "path outside registered prefixes rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "binding without sign grant rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "streaming payload marker rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "chunked transfer encoding rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "presigned query rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "credential without access_secret rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "static access key signs without a session token",
+      "detail": "absent"
+    },
+    {
+      "status": "PASS",
+      "name": "region override rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "binding without adapter config rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "unsupported method rejected",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "rejected requests produced no signature",
+      "detail": "2"
+    },
+    {
+      "status": "PASS",
+      "name": "reference request verified for structure comparison",
+      "detail": "true"
+    },
+    {
+      "status": "PASS",
+      "name": "aws cli signed request accepted by controlled upstream",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "aws cli authorization structure matches keykoi",
+      "detail": "true"
+    }
+  ],
+  "summary": {
+    "total": 21,
+    "failed": 0
+  }
+}

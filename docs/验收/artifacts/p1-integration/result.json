@@ -1,0 +1,108 @@
+{
+  "phase": "p1-integration",
+  "environment": {
+    "os": "macOS",
+    "tool_version": "aws-cli/2.41.0 Python/3.15.2 Darwin/27.0.0 source/arm64"
+  },
+  "checks": [
+    {
+      "status": "PASS",
+      "name": "tool detected with real version",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "preview shows only managed field",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "preview contains no secret value",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "managed helper entry written",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "unrelated profile preserved",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "existing keys preserved",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "config has no secret",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "config mode 0600",
+      "detail": "600"
+    },
+    {
+      "status": "PASS",
+      "name": "repeated attach is idempotent",
+      "detail": "2f9c274a7fdcc507e7513e9514712ecbb8b9a43423456d6cd6779e5d12840e6d"
+    },
+    {
+      "status": "PASS",
+      "name": "integration verified",
+      "detail": "verified"
+    },
+    {
+      "status": "PASS",
+      "name": "no drift initially",
+      "detail": "False"
+    },
+    {
+      "status": "PASS",
+      "name": "verify fails on drift",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "drift reported",
+      "detail": "True"
+    },
+    {
+      "status": "PASS",
+      "name": "state unverified after drift",
+      "detail": "unverified"
+    },
+    {
+      "status": "PASS",
+      "name": "verify refuses unverified tool version",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "unverified version keeps state unverified",
+      "detail": "unverified"
+    },
+    {
+      "status": "PASS",
+      "name": "managed field removed",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "unrelated profile survives detach",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "integration record removed",
+      "detail": "0"
+    }
+  ],
+  "summary": {
+    "total": 19,
+    "failed": 0
+  }
+}

@@ -1,0 +1,103 @@
+{
+  "phase": "p1-runtime",
+  "environment": {
+    "os": "macOS",
+    "aws_cli": "aws-cli/2.41.0 Python/3.15.2 Darwin/27.0.0 source/arm64"
+  },
+  "checks": [
+    {
+      "status": "PASS",
+      "name": "helper emits AWS credential_process JSON",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "helper writes nothing to stderr",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "launcher exit code 0",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "launcher revoked lease",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "upstream A authenticated",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "account A used its own credential",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "account B used its own credential",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "cross-account leak absent",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "exit code 9 propagated",
+      "detail": "9"
+    },
+    {
+      "status": "PASS",
+      "name": "cancel terminates promptly",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "cancel reflected in result",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "no residual descendant survives",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "cleanup status reported",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "no plaintext credential in tool home",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "run after rotation fails upstream auth",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "restart comes back locked",
+      "detail": "True"
+    },
+    {
+      "status": "PASS",
+      "name": "run refused while locked",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "run works after unlock",
+      "detail": "0"
+    }
+  ],
+  "summary": {
+    "total": 18,
+    "failed": 0
+  }
+}

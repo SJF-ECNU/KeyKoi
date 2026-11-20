@@ -1,0 +1,64 @@
+building binaries
+generating runtime test keys (ssh-keygen)
+fixture fingerprints: ed25519=SHA256:onSb3vmmJWaiYc1fTtsNUj2MAJLcYt+iFsiLdoN2b1A rsa=SHA256:+tl2Rdl9AM8FBCKdjbtXTLnHNGDlrY0mURdyMj38igw
+starting keykoid (encrypted vault backend, temporary data dir)
+vault initialized with a runtime-generated password
+seeding ssh_key credentials, bindings and sign grants
+grant=grant_duV7I9l4I_nS principal=principal_local_501
+P4.1: /v1/ssh-keys returns metadata only
+PASS ssh-keys lists both sign-granted ssh_key credentials (2)
+PASS ssh-keys response has no private key field (0)
+PASS ssh-keys response has no private key material (0)
+PASS ssh-keys reports ed25519 key fingerprint (SHA256:onSb3vmmJWaiYc1fTtsNUj2MAJLcYt+iFsiLdoN2b1A)
+PASS ssh-keys reports rsa key algorithm (ssh-rsa)
+P4.1: starting keykoi ssh-agent
+agent stdout: SSH_AUTH_SOCK=/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T//keykoi-p4ssh.pNjMrH/agent-ed.sock; export SSH_AUTH_SOCK;
+PASS agent socket is owner-only (0600) (600)
+PASS agent socket directory is owner-only (700)
+P4.2.1: enumerate through the real OpenSSH client (ssh-add -l)
+256 SHA256:onSb3vmmJWaiYc1fTtsNUj2MAJLcYt+iFsiLdoN2b1A p4 ssh ed25519 (ED25519)
+PASS ssh-add -l enumerates exactly one key for this binding (1)
+PASS ssh-add -l reports the managed key fingerprint (SHA256:onSb3vmmJWaiYc1fTtsNUj2MAJLcYt+iFsiLdoN2b1A)
+PASS agent does not enumerate the other binding's key (0)
+P4.2.2: real SSH authentication against a controlled sshd
+KEYKOI_SSH_OK
+PASS real sshd accepts agent-authenticated login (KEYKOI_SSH_OK)
+PASS sshd log records an accepted publickey for the managed key (1)
+P4.2.3: signature interoperability (ssh-keygen -Y sign / -Y verify)
+Good "keykoi-p4" signature for p4-ed25519 with ED25519 key SHA256:onSb3vmmJWaiYc1fTtsNUj2MAJLcYt+iFsiLdoN2b1A
+PASS ed25519 signature produced through the agent (1)
+PASS ed25519 signature verifies with ssh-keygen -Y verify (1)
+Good "keykoi-p4" signature for p4-rsa with RSA key SHA256:+tl2Rdl9AM8FBCKdjbtXTLnHNGDlrY0mURdyMj38igw
+PASS rsa signature produced through the agent (1)
+PASS rsa signature verifies with ssh-keygen -Y verify (1)
+PASS rsa signature uses an rsa-sha2 variant (agent signature flags) (1)
+rsa signature algorithm: rsa-sha2-512
+P4.1: agent started with a caller-provided session token
+2048 SHA256:+tl2Rdl9AM8FBCKdjbtXTLnHNGDlrY0mURdyMj38igw p4 ssh rsa (RSA)
+PASS agent honours an externally created session token (1)
+PASS token-backed agent reports the managed rsa fingerprint (SHA256:+tl2Rdl9AM8FBCKdjbtXTLnHNGDlrY0mURdyMj38igw)
+P4.2.4: establish a long-lived session before revocation
+P4.2.5: revoke the sign grant
+grant grant_duV7I9l4I_nS revoked
+PASS existing connection behaviour recorded after revocation (DONE_FROM_EXISTING)
+existing connection exit=0 (actual result recorded, not asserted)
+Warning: Permanently added '[127.0.0.1]:49836' (ED25519) to the list of known hosts.
+Load key "/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T//keykoi-p4ssh.pNjMrH/pub/ed25519.pub": invalid format
+shjf@127.0.0.1: Permission denied (publickey).
+PASS new sshd authentication rejected after revocation (1)
+The agent has no identities.
+PASS enumeration is empty after revocation (The agent has no identities.)
+PASS signing denied after revocation (1)
+PASS no signature file produced after revocation (0)
+post-revocation sign error: No private key found for public key "/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T//keykoi-p4ssh.pNjMrH/pub/ed25519.pub"
+PASS daemon denies sign resolution after revocation (403 USE_NOT_ALLOWED)
+P4.2.6: audit and log boundaries
+PASS audit records at least one allowed sign request (1)
+PASS audit records the denied sign request (1)
+PASS audit contains no key material (0)
+PASS daemon log contains no key material (0)
+PASS agent log contains no key material (0)
+P4.2.7: SIGTERM cleanup
+PASS agent exits on SIGTERM (1)
+PASS agent removes its socket on exit (1)
+P4 ssh-agent acceptance PASSED

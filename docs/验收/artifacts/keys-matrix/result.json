@@ -1,0 +1,105 @@
+{
+  "phase": "keys-matrix",
+  "environment": {
+    "os": "macOS 27.0 arm64",
+    "clients": "openai=2.24.0 anthropic=0.84.0",
+    "upstream": "controlled mock upstreams (one per key shape)",
+    "note": "未使用真实服务商密钥；所有密钥运行时生成。"
+  },
+  "checks": [
+    {
+      "status": "PASS",
+      "name": "OpenAI SDK call succeeds through gateway",
+      "detail": "keykoi-ok"
+    },
+    {
+      "status": "PASS",
+      "name": "OpenAI upstream got the real Bearer key",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "Anthropic SDK call succeeds through gateway",
+      "detail": "keykoi-ok"
+    },
+    {
+      "status": "PASS",
+      "name": "Anthropic upstream got the real x-api-key",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "gemini-style request accepted",
+      "detail": "200"
+    },
+    {
+      "status": "PASS",
+      "name": "Gemini upstream got the real x-goog-api-key",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "basic-auth request accepted",
+      "detail": "200"
+    },
+    {
+      "status": "PASS",
+      "name": "upstream got the real Basic credential",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "git credential fill returns the username",
+      "detail": "username=x-access-token"
+    },
+    {
+      "status": "PASS",
+      "name": "git credential fill returns the token as password",
+      "detail": "password=ghp_keykoi_7c7be9b789753e8706de"
+    },
+    {
+      "status": "PASS",
+      "name": "git helper did not leak KeyKoi token to stdout",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "service launched via proxy launcher gets a response",
+      "detail": "keykoi-ok"
+    },
+    {
+      "status": "PASS",
+      "name": "service only holds the intermediary token",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "proxy launcher holds no credential lease",
+      "detail": ""
+    },
+    {
+      "status": "PASS",
+      "name": "service requests reached the OpenAI upstream",
+      "detail": "2"
+    },
+    {
+      "status": "PASS",
+      "name": "request without session token rejected",
+      "detail": "401"
+    },
+    {
+      "status": "PASS",
+      "name": "unregistered route rejected",
+      "detail": "404"
+    },
+    {
+      "status": "PASS",
+      "name": "no upstream ever saw the intermediary token",
+      "detail": "0"
+    }
+  ],
+  "summary": {
+    "total": 18,
+    "failed": 0
+  }
+}

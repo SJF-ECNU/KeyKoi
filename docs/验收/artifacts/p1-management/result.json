@@ -1,0 +1,133 @@
+{
+  "phase": "p1-management",
+  "environment": {
+    "os": "macOS (native)",
+    "install": "launchd user agent + installed CLI"
+  },
+  "checks": [
+    {
+      "status": "PASS",
+      "name": "launchd service loaded",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "installed binaries exist",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "data directory permissions",
+      "detail": "700"
+    },
+    {
+      "status": "PASS",
+      "name": "UI page served",
+      "detail": "yes"
+    },
+    {
+      "status": "PASS",
+      "name": "API without admin token rejected",
+      "detail": "401"
+    },
+    {
+      "status": "PASS",
+      "name": "API with admin token works",
+      "detail": "200"
+    },
+    {
+      "status": "PASS",
+      "name": "unexpected Host rejected",
+      "detail": "403"
+    },
+    {
+      "status": "PASS",
+      "name": "cross-origin request rejected",
+      "detail": "403"
+    },
+    {
+      "status": "PASS",
+      "name": "state change without CSRF header rejected",
+      "detail": "403"
+    },
+    {
+      "status": "PASS",
+      "name": "UI lock action accepted with CSRF header",
+      "detail": "200"
+    },
+    {
+      "status": "PASS",
+      "name": "installed gateway path works",
+      "detail": "200"
+    },
+    {
+      "status": "PASS",
+      "name": "gateway injected credential",
+      "detail": "true"
+    },
+    {
+      "status": "PASS",
+      "name": "installed runtime delivery works",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "runtime delivered the real value to the child",
+      "detail": "yes"
+    },
+    {
+      "status": "PASS",
+      "name": "service restarted after upgrade",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "restart returns locked",
+      "detail": "True"
+    },
+    {
+      "status": "PASS",
+      "name": "old session cannot be used after restart",
+      "detail": "503"
+    },
+    {
+      "status": "PASS",
+      "name": "management API still available after upgrade",
+      "detail": "201"
+    },
+    {
+      "status": "PASS",
+      "name": "backup has no plaintext secret",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "restore leaves vault locked",
+      "detail": "True"
+    },
+    {
+      "status": "PASS",
+      "name": "pre-restore session stays invalid",
+      "detail": "401"
+    },
+    {
+      "status": "PASS",
+      "name": "restored grants wait for review",
+      "detail": "403"
+    },
+    {
+      "status": "PASS",
+      "name": "reviewed grant resumes use",
+      "detail": "200"
+    },
+    {
+      "status": "PASS",
+      "name": "uninstall removed launch agent",
+      "detail": "1"
+    }
+  ],
+  "summary": {
+    "total": 24,
+    "failed": 0
+  }
+}

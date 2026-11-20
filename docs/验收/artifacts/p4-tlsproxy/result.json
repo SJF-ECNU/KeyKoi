@@ -1,0 +1,157 @@
+{
+  "phase": "p4-tlsproxy",
+  "environment": {
+    "os": "macOS 27.0",
+    "arch": "arm64",
+    "upstream": "tests/fixtures/tlsupstream (in-memory, self-signed test CA, no credential persistence)",
+    "vault": "encrypted sqlite vault via keykoid + keykoi init",
+    "artifacts_note": "CA 私钥、临时凭证与工作目录在退出时删除；此目录只保留结果与代理日志（不含秘密）。"
+  },
+  "topology": {
+    "proxy": "http://127.0.0.1:49858",
+    "registered_good": "https://api.keykoi.test:49855",
+    "registered_bad_certificate": "https://bad.keykoi.test:49854",
+    "proxy_ca": "/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T/keykoi-p4-tlsproxy.sj79Ke/proxy-ca/ca.pem",
+    "trusted_upstream_ca": "/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T//keykoi-p4-tlsproxy.sj79Ke/up-good-ca/ca.pem",
+    "dns_note": "curl 通过 HTTPS 代理 CONNECT 到登记域名；代理用 --resolve 把登记域名映射到 127.0.0.1，TLS ServerName 与证书校验仍按登记域名进行。未修改 /etc/hosts。"
+  },
+  "checks": [
+    {
+      "status": "PASS",
+      "name": "proxy injects real credential on registered domain",
+      "detail": "true"
+    },
+    {
+      "status": "PASS",
+      "name": "proxy preserves query",
+      "detail": "a=1&a=2"
+    },
+    {
+      "status": "PASS",
+      "name": "proxy strips internal headers",
+      "detail": "false"
+    },
+    {
+      "status": "INFO",
+      "name": "legal-response",
+      "detail": "{\"auth_scheme\":\"Bearer\",\"keykoi_header_seen\":false,\"matched\":true,\"path\":\"/echo\",\"query\":\"a=1\\u0026a=2\",\"x_api_key_present\":false}"
+    },
+    {
+      "status": "PASS",
+      "name": "unregistered domain CONNECT rejected",
+      "detail": "ok"
+    },
+    {
+      "status": "PASS",
+      "name": "rejection is reported without injection",
+      "detail": "logged"
+    },
+    {
+      "status": "INFO",
+      "name": "unregistered-curl",
+      "detail": "exit=56 curl: (56) CONNECT tunnel failed, response 403 "
+    },
+    {
+      "status": "PASS",
+      "name": "client without proxy CA trust fails verification",
+      "detail": "verified_failure"
+    },
+    {
+      "status": "PASS",
+      "name": "untrusted client recorded as unsupported",
+      "detail": "recorded"
+    },
+    {
+      "status": "INFO",
+      "name": "untrusted-ca-curl",
+      "detail": "exit=60 curl: (60) SSL certificate problem: self signed certificate in certificate chain More details here: https://curl.se/docs/sslcerts.html  curl failed to verify the legitimacy of the server and therefore could not establish a secure connection to it. To learn more about this situation and how to fix it"
+    },
+    {
+      "status": "PASS",
+      "name": "invalid upstream certificate terminates CONNECT",
+      "detail": "terminated_with_502"
+    },
+    {
+      "status": "PASS",
+      "name": "upstream TLS rejection is identifiable",
+      "detail": "logged"
+    },
+    {
+      "status": "INFO",
+      "name": "upstream-rejection-detail",
+      "detail": "keykoi tls-proxy: CONNECT bad.keykoi.test:49854 rejected: upstream bad.keykoi.test:49854 verification failed with upstream_tls_invalid (no credential injected)"
+    },
+    {
+      "status": "INFO",
+      "name": "upstream-error-curl",
+      "detail": "exit=56 curl: (56) CONNECT tunnel failed, response 502 "
+    },
+    {
+      "status": "PASS",
+      "name": "upstream never sees intermediary session token",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "invalid-upstream target received no request",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "registered target received exactly the legal request",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "proxy log contains no credential value",
+      "detail": "absent"
+    },
+    {
+      "status": "PASS",
+      "name": "data directory contains no plaintext credential",
+      "detail": "absent"
+    },
+    {
+      "status": "PASS",
+      "name": "CA private key is 0600",
+      "detail": "600"
+    },
+    {
+      "status": "PASS",
+      "name": "CA public certificate is 0644",
+      "detail": "644"
+    },
+    {
+      "status": "PASS",
+      "name": "CA directory is 0700",
+      "detail": "700"
+    },
+    {
+      "status": "PASS",
+      "name": "SIGTERM exits cleanly",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "proxy listener is closed after SIGTERM",
+      "detail": "closed"
+    }
+  ],
+  "unsupported": [
+    {
+      "case": "certificate_pinning",
+      "status": "unsupported",
+      "detail": "工具固定上游证书或缺少独立信任配置时，客户端会在代理终止 TLS 后拒绝代理签发证书；代理记录 client_tls_failures 并明确提示，不执行注入。"
+    },
+    {
+      "case": "client_without_proxy_ca_trust",
+      "status": "unsupported",
+      "detail": "客户端未安装/不信任本机 CA 时验证失败（验收用 --cacert 不匹配复现），代理无法为该客户端提供认证。"
+    }
+  ],
+  "summary": {
+    "total": 24,
+    "failed": 0,
+    "informational": 5
+  }
+}

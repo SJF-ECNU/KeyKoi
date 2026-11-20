@@ -1,0 +1,385 @@
+{
+  "phase": "biometric-auth",
+  "generated_at": "2026-11-20T09:17:22.311034+00:00",
+  "environment": {
+    "os": "macOS-27.0-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "go": "go version go1.25.5 darwin/arm64",
+    "swift": "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+    "helper": "tests/fixtures/biometricstub (automation)",
+    "real_helper": "packaging/macos/keykoi-biometric"
+  },
+  "summary": {
+    "total": 65,
+    "passed": 65,
+    "failed": 0
+  },
+  "checks": [
+    {
+      "name": "credential created",
+      "status": "PASS",
+      "detail": "contains 'cred_'"
+    },
+    {
+      "name": "init auto-enrolled the root key into the protected store",
+      "status": "PASS",
+      "detail": "1"
+    },
+    {
+      "name": "auth status available",
+      "status": "PASS",
+      "detail": "true"
+    },
+    {
+      "name": "auth status enrolled",
+      "status": "PASS",
+      "detail": "true"
+    },
+    {
+      "name": "grant list carries the auth policy",
+      "status": "PASS",
+      "detail": "per_use"
+    },
+    {
+      "name": "enroll-biometric endpoint reports enrolled",
+      "status": "PASS",
+      "detail": "True"
+    },
+    {
+      "name": "re-enroll rewrites the protected entry",
+      "status": "PASS",
+      "detail": "2"
+    },
+    {
+      "name": "per_use use 1 allowed",
+      "status": "PASS",
+      "detail": "ok"
+    },
+    {
+      "name": "per_use use 2 allowed",
+      "status": "PASS",
+      "detail": "ok"
+    },
+    {
+      "name": "per_use use 3 allowed",
+      "status": "PASS",
+      "detail": "ok"
+    },
+    {
+      "name": "per_use triggered one verification per use",
+      "status": "PASS",
+      "detail": "3"
+    },
+    {
+      "name": "window use 1 allowed",
+      "status": "PASS",
+      "detail": "ok"
+    },
+    {
+      "name": "window use 2 allowed",
+      "status": "PASS",
+      "detail": "ok"
+    },
+    {
+      "name": "window reused one verification inside the window",
+      "status": "PASS",
+      "detail": "1"
+    },
+    {
+      "name": "window use after expiry allowed",
+      "status": "PASS",
+      "detail": "ok"
+    },
+    {
+      "name": "window re-verified after expiry",
+      "status": "PASS",
+      "detail": "2"
+    },
+    {
+      "name": "permanent use 1 allowed",
+      "status": "PASS",
+      "detail": "ok"
+    },
+    {
+      "name": "permanent use 3 allowed",
+      "status": "PASS",
+      "detail": "ok"
+    },
+    {
+      "name": "permanent never verifies",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "once use 1 allowed",
+      "status": "PASS",
+      "detail": "ok"
+    },
+    {
+      "name": "once use 2 allowed",
+      "status": "PASS",
+      "detail": "ok"
+    },
+    {
+      "name": "once verified only once in the same session",
+      "status": "PASS",
+      "detail": "1"
+    },
+    {
+      "name": "once use in a new session allowed",
+      "status": "PASS",
+      "detail": "ok"
+    },
+    {
+      "name": "once re-verified for the new session",
+      "status": "PASS",
+      "detail": "2"
+    },
+    {
+      "name": "use after unlock allowed",
+      "status": "PASS",
+      "detail": "ok"
+    },
+    {
+      "name": "lock dropped cached verifications",
+      "status": "PASS",
+      "detail": "1"
+    },
+    {
+      "name": "use after grant revoke and re-add allowed",
+      "status": "PASS",
+      "detail": "ok"
+    },
+    {
+      "name": "grant revoke dropped cached verification",
+      "status": "PASS",
+      "detail": "1"
+    },
+    {
+      "name": "window use before rotation allowed",
+      "status": "PASS",
+      "detail": "ok"
+    },
+    {
+      "name": "window use after rotation allowed",
+      "status": "PASS",
+      "detail": "ok"
+    },
+    {
+      "name": "rotation dropped cached verification",
+      "status": "PASS",
+      "detail": "2"
+    },
+    {
+      "name": "use without biometric and without fallback is denied",
+      "status": "PASS",
+      "detail": "AUTH_UNAVAILABLE"
+    },
+    {
+      "name": "password fallback verification accepted",
+      "status": "PASS",
+      "detail": "password"
+    },
+    {
+      "name": "one use after password fallback allowed",
+      "status": "PASS",
+      "detail": "ok"
+    },
+    {
+      "name": "password fallback is single use for per_use",
+      "status": "PASS",
+      "detail": "AUTH_UNAVAILABLE"
+    },
+    {
+      "name": "audit records biometric verifications",
+      "status": "PASS",
+      "detail": "contains 'biometric'"
+    },
+    {
+      "name": "audit records the password fallback",
+      "status": "PASS",
+      "detail": "contains 'password'"
+    },
+    {
+      "name": "unlock --biometric falls back to the master password",
+      "status": "PASS",
+      "detail": "contains 'vault unlocked (master password)'"
+    },
+    {
+      "name": "fallback announces the biometric failure",
+      "status": "PASS",
+      "detail": "contains 'Touch ID 不可用'"
+    },
+    {
+      "name": "unlock --biometric without any fallback fails",
+      "status": "PASS",
+      "detail": "1"
+    },
+    {
+      "name": "explicit refusal names the stable error code",
+      "status": "PASS",
+      "detail": "contains 'AUTH_UNAVAILABLE'"
+    },
+    {
+      "name": "biometric unlock succeeds",
+      "status": "PASS",
+      "detail": "contains 'vault unlocked (Touch ID)'"
+    },
+    {
+      "name": "vault state after biometric unlock",
+      "status": "PASS",
+      "detail": "unlocked"
+    },
+    {
+      "name": "explicit biometric verification accepted",
+      "status": "PASS",
+      "detail": "biometric"
+    },
+    {
+      "name": "explicit biometric verification reached the helper",
+      "status": "PASS",
+      "detail": "1"
+    },
+    {
+      "name": "once policy reuses the explicit verification in-session",
+      "status": "PASS",
+      "detail": "ok"
+    },
+    {
+      "name": "cancelled biometric verification is AUTH_REQUIRED",
+      "status": "PASS",
+      "detail": "AUTH_REQUIRED"
+    },
+    {
+      "name": "every audit row carries auth method and result",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "allowed rows carry biometric results",
+      "status": "PASS",
+      "detail": "contains 'biometric'"
+    },
+    {
+      "name": "allowed rows carry password results",
+      "status": "PASS",
+      "detail": "contains 'password'"
+    },
+    {
+      "name": "denied rows record the policy outcome",
+      "status": "PASS",
+      "detail": "yes"
+    },
+    {
+      "name": "UI exposes the Touch ID unlock control",
+      "status": "PASS",
+      "detail": "contains 'Touch ID 解锁'"
+    },
+    {
+      "name": "UI exposes the auth policy selector",
+      "status": "PASS",
+      "detail": "contains '验证策略'"
+    },
+    {
+      "name": "UI warns about permanent grants",
+      "status": "PASS",
+      "detail": "contains '永久免验证'"
+    },
+    {
+      "name": "biometric unlock without admin token is 401",
+      "status": "PASS",
+      "detail": "401"
+    },
+    {
+      "name": "unavailable biometric unlock maps to 503",
+      "status": "PASS",
+      "detail": "503"
+    },
+    {
+      "name": "503 body carries the stable auth code",
+      "status": "PASS",
+      "detail": "contains 'AUTH_UNAVAILABLE'"
+    },
+    {
+      "name": "available biometric unlock maps to 200",
+      "status": "PASS",
+      "detail": "200"
+    },
+    {
+      "name": "auth status without admin token is 401",
+      "status": "PASS",
+      "detail": "401"
+    },
+    {
+      "name": "grant created over HTTP keeps its policy",
+      "status": "PASS",
+      "detail": "permanent"
+    },
+    {
+      "name": "doctor reports biometric availability",
+      "status": "PASS",
+      "detail": "contains 'biometric (Touch ID)'"
+    },
+    {
+      "name": "real helper available command ran",
+      "status": "PASS",
+      "detail": "1"
+    },
+    {
+      "name": "real keychain enrollment is blocked by code signing (manual)",
+      "status": "PASS",
+      "detail": "exit=4 hint=keychain rejected the biometric access control (errSecMissingEntitlement, -34018)."
+    },
+    {
+      "name": "go build ./... passes",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "go test ./internal/{vault,broker,store,daemon} passes",
+      "status": "PASS",
+      "detail": "0"
+    }
+  ],
+  "policies": {
+    "once": "同一会话内验证一次；新会话重新验证",
+    "window": "验证后 N 秒内复用；过期后重新验证（验收用 window:2）",
+    "per_use": "每次用钥都触发系统验证",
+    "permanent": "不触发验证；需要二次确认",
+    "default": "once"
+  },
+  "real_biometric": {
+    "available_exit_code": 0,
+    "store_exit_code": 4,
+    "store": "blocked_by_code_signing",
+    "store_message": "keychain rejected the biometric access control (errSecMissingEntitlement, -34018).",
+    "load": "manual: 需要在交互会话中确认 Touch ID",
+    "manual_steps": [
+      "bash packaging/macos/build-biometric.sh",
+      "codesign --force --sign \"<Apple Development identity>\" --entitlements packaging/macos/keykoi-biometric.entitlements packaging/macos/keykoi-biometric",
+      "keykoi vault enroll-biometric   # 登记根密钥到 Keychain（ACL: biometryCurrentSet）",
+      "keykoi unlock --biometric       # 终端会出现 Touch ID 提示，需人工确认",
+      "keykoi auth status              # 应显示 available=true enrolled=true"
+    ],
+    "notes": [
+      "自动化只运行不弹窗的 available 与写入尝试；store/load 需要人工指纹确认，因此在自动化中标记为 manual。",
+      "生物识别 ACL 只对带 keychain-access-groups 权限的签名二进制开放；裸编译产物会被系统以 errSecMissingEntitlement(-34018) 拒绝，此时主密码仍是唯一入口。"
+    ]
+  },
+  "go": {
+    "build": "pass",
+    "build_output": "",
+    "tests": "pass",
+    "test_output": [
+      "ok  \tkeykoi/internal/vault\t0.820s",
+      "ok  \tkeykoi/internal/broker\t(cached)",
+      "ok  \tkeykoi/internal/store\t(cached)",
+      "ok  \tkeykoi/internal/daemon\t(cached)"
+    ]
+  },
+  "commands": {
+    "rerun": "bash tests/acceptance/biometric-auth.sh",
+    "unit": "go test ./internal/vault ./internal/broker ./internal/store ./internal/daemon",
+    "build": "go build ./..."
+  }
+}

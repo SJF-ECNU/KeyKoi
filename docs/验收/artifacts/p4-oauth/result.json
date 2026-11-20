@@ -1,0 +1,240 @@
+{
+  "phase": "p4-oauth",
+  "change": "p4-oauth-refresh",
+  "environment": {
+    "os": "macOS 27.0",
+    "arch": "arm64",
+    "provider": "tests/fixtures/oauthprovider (standard OAuth 2.0 authorization code + PKCE S256 + refresh_token rotation)",
+    "provider_url": "http://127.0.0.1:50212",
+    "client_registration": "generated at runtime by the fixture; no real credentials",
+    "client_id_prefix": "client_***",
+    "credential": "cred_VhlAZ_dFm3wI",
+    "clock_skew": "5s (KEYKOI_OAUTH_CLOCK_SKEW; production default 30s)"
+  },
+  "checks": [
+    {
+      "status": "PASS",
+      "name": "begin emits an authorization URL",
+      "detail": "true"
+    },
+    {
+      "status": "PASS",
+      "name": "authorization URL uses PKCE S256",
+      "detail": "true"
+    },
+    {
+      "status": "PASS",
+      "name": "authorization URL carries no code_verifier",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "state is bound to the authorization URL",
+      "detail": "true"
+    },
+    {
+      "status": "PASS",
+      "name": "provider returns the same state",
+      "detail": "true"
+    },
+    {
+      "status": "PASS",
+      "name": "callback commits version 2",
+      "detail": "2"
+    },
+    {
+      "status": "PASS",
+      "name": "callback leaves the credential active",
+      "detail": "active"
+    },
+    {
+      "status": "PASS",
+      "name": "callback rotates the refresh token",
+      "detail": "true"
+    },
+    {
+      "status": "PASS",
+      "name": "provider saw exactly one code exchange",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "cache expiry is real expiry minus the clock skew",
+      "detail": "true"
+    },
+    {
+      "status": "PASS",
+      "name": "credential list shows v2 active metadata",
+      "detail": "2|active|oauth"
+    },
+    {
+      "status": "PASS",
+      "name": "gateway uses the managed access token",
+      "detail": "true"
+    },
+    {
+      "status": "PASS",
+      "name": "fresh credential is not refreshed again",
+      "detail": "false"
+    },
+    {
+      "status": "PASS",
+      "name": "no-op refresh does not touch the upstream",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "both concurrent refreshes succeed",
+      "detail": "0 0"
+    },
+    {
+      "status": "PASS",
+      "name": "concurrent refresh calls the upstream exactly once",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "concurrent refresh advances exactly one version",
+      "detail": "3"
+    },
+    {
+      "status": "PASS",
+      "name": "queued refresh observes the same version",
+      "detail": "3"
+    },
+    {
+      "status": "PASS",
+      "name": "only one request advances the refresh",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "rotated token combination is live upstream",
+      "detail": "true"
+    },
+    {
+      "status": "PASS",
+      "name": "status reports the advanced version",
+      "detail": "3"
+    },
+    {
+      "status": "PASS",
+      "name": "status never exposes token material",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "revoked refresh fails",
+      "detail": "nonzero"
+    },
+    {
+      "status": "PASS",
+      "name": "revocation is reported as re-auth required",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "revocation is persisted as revoked",
+      "detail": "revoked"
+    },
+    {
+      "status": "PASS",
+      "name": "revoked credential asks for re-authorization",
+      "detail": "reauth"
+    },
+    {
+      "status": "PASS",
+      "name": "re-authorization restores active status",
+      "detail": "active"
+    },
+    {
+      "status": "PASS",
+      "name": "network failure fails the refresh",
+      "detail": "nonzero"
+    },
+    {
+      "status": "PASS",
+      "name": "network failure is classed retryable",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "network failure leaves the version untouched",
+      "detail": "4"
+    },
+    {
+      "status": "PASS",
+      "name": "network failure leaves the credential active",
+      "detail": "active"
+    },
+    {
+      "status": "PASS",
+      "name": "local commit failure surfaces as recovery_required",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "commit failure exits non-zero",
+      "detail": "nonzero"
+    },
+    {
+      "status": "PASS",
+      "name": "upstream rotation did happen before the local failure",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "recovery state is visible in status",
+      "detail": "true"
+    },
+    {
+      "status": "PASS",
+      "name": "recovery state points at re-authorization",
+      "detail": "reauth"
+    },
+    {
+      "status": "PASS",
+      "name": "failed commit did not advance the version",
+      "detail": "4"
+    },
+    {
+      "status": "PASS",
+      "name": "re-authorization clears the recovery state",
+      "detail": "false"
+    },
+    {
+      "status": "PASS",
+      "name": "credential is active after recovery",
+      "detail": "active"
+    },
+    {
+      "status": "PASS",
+      "name": "final version is consistent",
+      "detail": "5"
+    },
+    {
+      "status": "PASS",
+      "name": "no token material in daemon log or CLI output",
+      "detail": "0"
+    }
+  ],
+  "measurements": {
+    "upstream_token_code_calls": 3,
+    "upstream_token_refresh_calls": 2,
+    "upstream_rejections": 1,
+    "upstream_revocations": 1,
+    "concurrent_refresh_upstream_calls": 1,
+    "recovery_required_after_commit_failure": true
+  },
+  "notes": [
+    "credential=cred_VhlAZ_dFm3wI",
+    "authorization_url_len=298",
+    "provider_expires_at=2026-11-20T11:05:28.164921Z cache_expires_at=2026-11-20T11:05:23.164921Z",
+    "version_before=2 version_after=3 version_b=3",
+    "final provider stats: {\"authorize_calls\":3,\"expires_in\":900,\"fail_network\":false,\"fail_status\":0,\"live_access_tokens\":2,\"live_refresh_tokens\":2,\"rejected\":1,\"revocations\":1,\"token_code_calls\":3,\"token_refresh_calls\":2}"
+  ],
+  "summary": {
+    "total": 41,
+    "failed": 0
+  }
+}

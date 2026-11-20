@@ -1,0 +1,8 @@
+keykoi tls-proxy: registered target: binding=bind_p4_tls_good host=api.keykoi.test auth=bearer
+keykoi tls-proxy: registered target: binding=bind_p4_tls_bad host=bad.keykoi.test auth=bearer
+keykoi tls-proxy: ready: bindings=[bind_p4_tls_good bind_p4_tls_bad] ca=/var/folders/h2/791ztw0d6_s1klfnc9p8h_4c0000gn/T/keykoi-p4-tlsproxy.sj79Ke/proxy-ca/ca.pem
+keykoi tls-proxy: CONNECT unregistered.keykoi.test:443 rejected: target domain is not registered for this proxy (no credential injected)
+keykoi tls-proxy: client TLS handshake for api.keykoi.test:49855 failed: remote error: tls: unknown certificate authority; client does not trust the KeyKoi CA or pins certificates, which is recorded as unsupported
+keykoi tls-proxy: CONNECT bad.keykoi.test:49854 rejected: upstream bad.keykoi.test:49854 verification failed with upstream_tls_invalid (no credential injected)
+keykoi tls-proxy: received terminated; closing tunnels and closing the proxy session
+keykoi tls-proxy: stopped: connects=2 rejected=2 client_tls_failures=1 upstream_tls_invalid=1 binding_changed=0 injected=1 forwarded=1

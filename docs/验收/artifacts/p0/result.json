@@ -1,0 +1,97 @@
+{
+  "phase": "p0",
+  "environment": {
+    "os": "macOS 27.0",
+    "arch": "arm64",
+    "aws_cli": "aws-cli/2.41.0 Python/3.15.2 Darwin/27.0.0 source/arm64",
+    "upstream": "tests/fixtures/mockupstream (in-memory, no credential persistence)"
+  },
+  "measurements": {
+    "proxy_ttfb_p50_ms": 0.204,
+    "direct_ttfb_p50_ms": 0.07,
+    "proxy_stream_first_chunk_ms": 0.282,
+    "proxy_stream_total_ms": 484.618
+  },
+  "aws_cache": {
+    "path": "/Users/shjf/.aws/cli/cache",
+    "files_before_run": 1,
+    "files_after_run": 1,
+    "note": "AWS CLI 会把 credential_process 结果写入该缓存目录；这是真实工具行为，属于运行时交付边界。"
+  },
+  "checks": [
+    {
+      "status": "PASS",
+      "name": "helper requires runtime_delivery grant",
+      "detail": "denied"
+    },
+    {
+      "status": "PASS",
+      "name": "gateway injects real credential",
+      "detail": "true"
+    },
+    {
+      "status": "PASS",
+      "name": "gateway strips internal headers",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "gateway preserves duplicate query params",
+      "detail": "a=1&a=2"
+    },
+    {
+      "status": "PASS",
+      "name": "upstream never sees session token",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "request without session rejected",
+      "detail": "401"
+    },
+    {
+      "status": "PASS",
+      "name": "unregistered target rejected",
+      "detail": "404"
+    },
+    {
+      "status": "PASS",
+      "name": "cross-origin redirect not followed",
+      "detail": "302"
+    },
+    {
+      "status": "PASS",
+      "name": "aws cli authenticated via helper",
+      "detail": "ok"
+    },
+    {
+      "status": "PASS",
+      "name": "aws cli signature carries helper credential",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "aws cli never sends intermediary token",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "proxy p50 recorded",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "stream first chunk precedes completion",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "locked vault rejects gateway use",
+      "detail": "503"
+    }
+  ],
+  "summary": {
+    "total": 14,
+    "failed": 0
+  }
+}

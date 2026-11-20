@@ -1,0 +1,188 @@
+{
+  "phase": "ui-login",
+  "generated_at": "2026-11-20T10:51:27.612569+00:00",
+  "environment": {
+    "os": "macOS-27.0-arm64-arm-64bit-Mach-O",
+    "machine": "arm64",
+    "go": "go version go1.25.5 darwin/arm64",
+    "node": "node v24.18.0",
+    "admin_address": "127.0.0.1:50557"
+  },
+  "summary": {
+    "total": 30,
+    "passed": 30,
+    "failed": 0
+  },
+  "checks": [
+    {
+      "name": "--no-open exits 0",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "prints the admin URL with the token fragment",
+      "status": "PASS",
+      "detail": "contains 'http://127.0.0.1:50557/#token=7cbcfad242e8e45181caece915bcf6719771a439d7e4887c1cdd86402762fac1'"
+    },
+    {
+      "name": "explains the fragment is cleared by the page",
+      "status": "PASS",
+      "detail": "contains 'fragment'"
+    },
+    {
+      "name": "stderr carries no token",
+      "status": "PASS",
+      "detail": "does not contain '7cbcfad242e8e45181caece915bcf6719771a439d7e4887c1cdd86402762fac1'"
+    },
+    {
+      "name": "token appears only on the URL line",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "explicit --admin produces the same link",
+      "status": "PASS",
+      "detail": "http://127.0.0.1:50557/#token=7cbcfad242e8e45181caece915bcf6719771a439d7e4887c1cdd86402762fac1"
+    },
+    {
+      "name": "scheme and trailing slash are normalized",
+      "status": "PASS",
+      "detail": "http://127.0.0.1:50557/#token=7cbcfad242e8e45181caece915bcf6719771a439d7e4887c1cdd86402762fac1"
+    },
+    {
+      "name": "browser mode exits 0",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "the browser receives the tokenized link",
+      "status": "PASS",
+      "detail": "http://127.0.0.1:50557/#token=7cbcfad242e8e45181caece915bcf6719771a439d7e4887c1cdd86402762fac1"
+    },
+    {
+      "name": "browser mode reports the opened address",
+      "status": "PASS",
+      "detail": "contains '已在本机浏览器打开 http://127.0.0.1:50557/'"
+    },
+    {
+      "name": "browser mode keeps the token out of stdout",
+      "status": "PASS",
+      "detail": "does not contain '7cbcfad242e8e45181caece915bcf6719771a439d7e4887c1cdd86402762fac1'"
+    },
+    {
+      "name": "browser mode keeps the token out of stderr",
+      "status": "PASS",
+      "detail": "does not contain '7cbcfad242e8e45181caece915bcf6719771a439d7e4887c1cdd86402762fac1'"
+    },
+    {
+      "name": "missing backend exits non-zero",
+      "status": "PASS",
+      "detail": "1"
+    },
+    {
+      "name": "missing backend explains what to do",
+      "status": "PASS",
+      "detail": "contains '读取后台管理地址失败'"
+    },
+    {
+      "name": "failure path prints no token",
+      "status": "PASS",
+      "detail": "does not contain '7cbcfad242e8e45181caece915bcf6719771a439d7e4887c1cdd86402762fac1'"
+    },
+    {
+      "name": "page is served",
+      "status": "PASS",
+      "detail": "contains '<!doctype html>'"
+    },
+    {
+      "name": "page reads location.hash",
+      "status": "PASS",
+      "detail": "contains 'location.hash'"
+    },
+    {
+      "name": "page parses the token parameter",
+      "status": "PASS",
+      "detail": "contains 'params.get(\"token\")'"
+    },
+    {
+      "name": "page clears the hash",
+      "status": "PASS",
+      "detail": "contains 'history.replaceState'"
+    },
+    {
+      "name": "page fills the token box and connects",
+      "status": "PASS",
+      "detail": "contains 'loginFromHash'"
+    },
+    {
+      "name": "page keeps Referrer-Policy no-referrer",
+      "status": "PASS",
+      "detail": "contains 'no-referrer'"
+    },
+    {
+      "name": "served page contains no literal admin token",
+      "status": "PASS",
+      "detail": "does not contain '7cbcfad242e8e45181caece915bcf6719771a439d7e4887c1cdd86402762fac1'"
+    },
+    {
+      "name": "hash login: token is parsed",
+      "status": "PASS",
+      "detail": "abc123"
+    },
+    {
+      "name": "hash login: hash is cleared once",
+      "status": "PASS",
+      "detail": "1"
+    },
+    {
+      "name": "hash login: cleared to the bare path",
+      "status": "PASS",
+      "detail": "/"
+    },
+    {
+      "name": "hash login: percent-encoded token is decoded",
+      "status": "PASS",
+      "detail": "abc+123"
+    },
+    {
+      "name": "hash login: no hash returns no token",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "hash login: no hash leaves history alone",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "hash login: unrelated fragment is untouched",
+      "status": "PASS",
+      "detail": "0"
+    },
+    {
+      "name": "go build ./... passes",
+      "status": "PASS",
+      "detail": "0"
+    }
+  ],
+  "behavior": {
+    "command": "keykoi ui [--admin ADDR] [--no-open]",
+    "link": "http://<admin>/#token=<admin.token>",
+    "token_handling": [
+      "令牌只出现在 URL fragment，不进入请求行，因此服务端访问日志里没有令牌。",
+      "页面加载时读取 location.hash 的 token=、填入登录框并自动连接，随后立即 history.replaceState 清除 hash。",
+      "默认模式（打开浏览器）不把令牌写到 stdout/stderr；--no-open 打印一次登录链接以便手动复制。",
+      "管理页面本身带 Referrer-Policy: no-referrer，fragment 也不会随 Referer 外泄。"
+    ],
+    "no_open": "--no-open 只打印登录链接与说明，不启动浏览器；自动化用它断言 URL 构造。",
+    "scope": "只打开回环管理地址；地址来源是后台实际监听地址或 --admin。"
+  },
+  "go": {
+    "build": "pass",
+    "build_output": ""
+  },
+  "commands": {
+    "rerun": "bash tests/acceptance/ui-login.sh",
+    "manual": "keykoi init && keykoi ui（浏览器应自动登录，地址栏里不残留 #token=）"
+  }
+}

@@ -1,0 +1,79 @@
+{
+  "phase": "tool-aliyun",
+  "environment": {
+    "os": "macOS 27.0 arm64",
+    "tool": "3.5.3",
+    "upstream": "controlled HTTPS mock (self-signed test cert, no real Alibaba Cloud endpoint)",
+    "delivery": "runtime_delivery via keykoi run environment injection",
+    "caveat": "aliyun CLI --skip-secure-verify is used only to trust the controlled test certificate; KeyKoi 自身的上游校验未关闭。"
+  },
+  "measurements": {
+    "run_duration_ms": 52
+  },
+  "checks": [
+    {
+      "status": "PASS",
+      "name": "aliyun command exits 0",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "aliyun received a well-formed API response",
+      "detail": "yes"
+    },
+    {
+      "status": "PASS",
+      "name": "managed run reports clean process tree",
+      "detail": "no_leftover_processes"
+    },
+    {
+      "status": "PASS",
+      "name": "lease revoked after run",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "upstream saw AccessKeyId from KeyKoi (value matched)",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "upstream saw the request action",
+      "detail": "DescribeRegions"
+    },
+    {
+      "status": "PASS",
+      "name": "aliyun signed the request with the delivered secret",
+      "detail": "True"
+    },
+    {
+      "status": "PASS",
+      "name": "session token field delivered as SecurityToken",
+      "detail": "True"
+    },
+    {
+      "status": "PASS",
+      "name": "KeyKoi intermediary token never reached upstream",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "runtime delivery without grant is refused",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "locked vault refuses new use",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "tool home has no plaintext access secret",
+      "detail": "0"
+    }
+  ],
+  "summary": {
+    "total": 12,
+    "failed": 0
+  }
+}

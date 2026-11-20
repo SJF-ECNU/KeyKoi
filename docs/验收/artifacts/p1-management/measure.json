@@ -1,0 +1,318 @@
+{
+  "direct": {
+    "label": "direct",
+    "url": "http://127.0.0.1:49936/echo",
+    "requests": 20,
+    "samples": [
+      {
+        "status": 200,
+        "ttfb_ms": 0.261,
+        "total_ms": 0.269,
+        "bytes": 118
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.087,
+        "total_ms": 0.095,
+        "bytes": 118
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.075,
+        "total_ms": 0.082,
+        "bytes": 118
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.083,
+        "total_ms": 0.089,
+        "bytes": 118
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.083,
+        "total_ms": 0.09,
+        "bytes": 118
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.086,
+        "total_ms": 0.094,
+        "bytes": 118
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.086,
+        "total_ms": 0.092,
+        "bytes": 118
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.084,
+        "total_ms": 0.09,
+        "bytes": 118
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.084,
+        "total_ms": 0.089,
+        "bytes": 118
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.089,
+        "total_ms": 0.094,
+        "bytes": 118
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.082,
+        "total_ms": 0.086,
+        "bytes": 118
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.071,
+        "total_ms": 0.075,
+        "bytes": 118
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.064,
+        "total_ms": 0.07,
+        "bytes": 118
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.081,
+        "total_ms": 0.087,
+        "bytes": 118
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.078,
+        "total_ms": 0.084,
+        "bytes": 118
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.069,
+        "total_ms": 0.073,
+        "bytes": 118
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.06,
+        "total_ms": 0.064,
+        "bytes": 118
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.05,
+        "total_ms": 0.053,
+        "bytes": 118
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.06,
+        "total_ms": 0.067,
+        "bytes": 118
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.049,
+        "total_ms": 0.052,
+        "bytes": 118
+      }
+    ],
+    "ttfb_percentiles_ms": {
+      "max": 0.261,
+      "min": 0.049,
+      "p50": 0.081,
+      "p95": 0.089,
+      "p99": 0.089
+    },
+    "total_percentiles_ms": {
+      "max": 0.269,
+      "min": 0.052,
+      "p50": 0.086,
+      "p95": 0.095,
+      "p99": 0.095
+    },
+    "errors": 0,
+    "first_request_ms": 0.269
+  },
+  "direct_stream": {
+    "url": "http://127.0.0.1:49936/stream?chunks=4\u0026delay=120ms",
+    "status": 200,
+    "first_chunk_ms": 1.247,
+    "total_ms": 485.609,
+    "chunk_times_ms": [
+      1.247,
+      122.487,
+      243.772,
+      364.662
+    ],
+    "bytes": 32
+  },
+  "gateway": "127.0.0.1:49900",
+  "generated_at": "2026-11-20T10:48:44Z",
+  "path": "/echo",
+  "proxy": {
+    "label": "proxy",
+    "url": "http://127.0.0.1:49900/gateway/mgmt-http/echo",
+    "requests": 20,
+    "samples": [
+      {
+        "status": 200,
+        "ttfb_ms": 0.772,
+        "total_ms": 0.782,
+        "bytes": 119
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.4,
+        "total_ms": 0.411,
+        "bytes": 119
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.406,
+        "total_ms": 0.414,
+        "bytes": 119
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.458,
+        "total_ms": 0.469,
+        "bytes": 119
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.404,
+        "total_ms": 0.411,
+        "bytes": 119
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.366,
+        "total_ms": 0.376,
+        "bytes": 119
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.347,
+        "total_ms": 0.354,
+        "bytes": 119
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.371,
+        "total_ms": 0.379,
+        "bytes": 119
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.387,
+        "total_ms": 0.391,
+        "bytes": 119
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.329,
+        "total_ms": 0.336,
+        "bytes": 119
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.35,
+        "total_ms": 0.359,
+        "bytes": 119
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.338,
+        "total_ms": 0.344,
+        "bytes": 119
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.36,
+        "total_ms": 0.367,
+        "bytes": 119
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.335,
+        "total_ms": 0.342,
+        "bytes": 119
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.33,
+        "total_ms": 0.336,
+        "bytes": 119
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.304,
+        "total_ms": 0.314,
+        "bytes": 119
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.286,
+        "total_ms": 0.291,
+        "bytes": 119
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.336,
+        "total_ms": 0.34,
+        "bytes": 119
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.3,
+        "total_ms": 0.304,
+        "bytes": 119
+      },
+      {
+        "status": 200,
+        "ttfb_ms": 0.3,
+        "total_ms": 0.308,
+        "bytes": 119
+      }
+    ],
+    "ttfb_percentiles_ms": {
+      "max": 0.772,
+      "min": 0.286,
+      "p50": 0.347,
+      "p95": 0.458,
+      "p99": 0.458
+    },
+    "total_percentiles_ms": {
+      "max": 0.782,
+      "min": 0.291,
+      "p50": 0.354,
+      "p95": 0.469,
+      "p99": 0.469
+    },
+    "errors": 0,
+    "first_request_ms": 0.782
+  },
+  "proxy_stream": {
+    "url": "http://127.0.0.1:49900/gateway/mgmt-http/stream?chunks=4\u0026delay=120ms",
+    "status": 200,
+    "first_chunk_ms": 0.349,
+    "total_ms": 486.184,
+    "chunk_times_ms": [
+      0.349,
+      121.548,
+      242.82,
+      363.959
+    ],
+    "bytes": 32
+  },
+  "route": "mgmt-http"
+}

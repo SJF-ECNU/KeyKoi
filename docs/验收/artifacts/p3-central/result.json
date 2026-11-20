@@ -1,0 +1,96 @@
+{
+  "phase": "p3-central",
+  "environment": {
+    "os": "macOS (native)",
+    "topology": "single Mac: PostgreSQL 18 + center service + independent device clients",
+    "postgres": "18 (local)"
+  },
+  "measurements": {
+    "online_revocation_propagation_ms": 47,
+    "offline_remaining_seconds_observed": 7.1,
+    "epoch_before_restart": "906717230c0001de4ed7",
+    "epoch_after_restart": "4c347c8fa791ce525343",
+    "center_authenticated_request_ms": 23
+  },
+  "checks": [
+    {
+      "status": "PASS",
+      "name": "device A registered independently",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "device A authorized through the center",
+      "detail": "200"
+    },
+    {
+      "status": "PASS",
+      "name": "device B authorized through the center",
+      "detail": "200"
+    },
+    {
+      "status": "PASS",
+      "name": "device A still authorized after version bump",
+      "detail": "200"
+    },
+    {
+      "status": "PASS",
+      "name": "new leases carry the updated credential version",
+      "detail": "2"
+    },
+    {
+      "status": "PASS",
+      "name": "revoked device stops new use",
+      "detail": "503"
+    },
+    {
+      "status": "PASS",
+      "name": "revocation propagated on next request",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "other device unaffected by device revocation",
+      "detail": "200"
+    },
+    {
+      "status": "PASS",
+      "name": "binding revocation also stops device B",
+      "detail": "503"
+    },
+    {
+      "status": "PASS",
+      "name": "short-term device authorized while center online",
+      "detail": "200"
+    },
+    {
+      "status": "PASS",
+      "name": "short-term device still within lease after center loss",
+      "detail": "200"
+    },
+    {
+      "status": "PASS",
+      "name": "short-term device stops after absolute deadline",
+      "detail": "503"
+    },
+    {
+      "status": "PASS",
+      "name": "short-term device resumes after center returns",
+      "detail": "200"
+    },
+    {
+      "status": "PASS",
+      "name": "center restart rotates authorization epoch",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "stale lease cannot be confirmed after epoch change",
+      "detail": "403"
+    }
+  ],
+  "summary": {
+    "total": 15,
+    "failed": 0
+  }
+}

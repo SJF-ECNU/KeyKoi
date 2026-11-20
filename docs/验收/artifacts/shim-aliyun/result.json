@@ -1,0 +1,156 @@
+{
+  "phase": "shim-aliyun",
+  "environment": {
+    "os": "macOS 27.0 arm64",
+    "tool": "3.5.3",
+    "entry": "PATH shim -> keykoi runtime_delivery",
+    "upstream": "controlled HTTPS mock (self-signed test cert)",
+    "caveat": "aliyun CLI --skip-secure-verify only for the controlled test certificate."
+  },
+  "checks": [
+    {
+      "status": "PASS",
+      "name": "install warns about the existing plaintext profile",
+      "detail": "yes"
+    },
+    {
+      "status": "PASS",
+      "name": "shim symlink installed",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "shim record has no secret",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "shell path block added once",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "PATH now resolves aliyun to the shim",
+      "detail": "yes"
+    },
+    {
+      "status": "PASS",
+      "name": "aliyun via shim exits 0",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "response came back through the shim",
+      "detail": "yes"
+    },
+    {
+      "status": "PASS",
+      "name": "upstream saw the injected AccessKeyId",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "user's plaintext config was bypassed, not used",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "user's config file itself was not modified",
+      "detail": "yes"
+    },
+    {
+      "status": "PASS",
+      "name": "managed config path stays absent (no plaintext file created)",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "aliyun signed with the injected secret",
+      "detail": "True"
+    },
+    {
+      "status": "PASS",
+      "name": "security token delivered",
+      "detail": "True"
+    },
+    {
+      "status": "PASS",
+      "name": "no intermediary token upstream",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "region argument reached the upstream request",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "static credential works without a security token",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "static call sent no empty security token",
+      "detail": "False"
+    },
+    {
+      "status": "PASS",
+      "name": "explicit config path is refused",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "refusal explains the shim limitation",
+      "detail": "yes"
+    },
+    {
+      "status": "PASS",
+      "name": "configure list still reads the real (masked) profile",
+      "detail": "yes"
+    },
+    {
+      "status": "PASS",
+      "name": "invalid subcommand exits non-zero through shim",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "refuses to shim a binary that resolves to itself",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "local commands work offline (no credential needed)",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "credential calls fail when keykoid is down",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "failure names the daemon problem",
+      "detail": "yes"
+    },
+    {
+      "status": "PASS",
+      "name": "shim symlink removed",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "PATH block removed from shell rc",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "aliyun resolves to the real tool again",
+      "detail": "/opt/homebrew/bin/aliyun"
+    }
+  ],
+  "summary": {
+    "total": 28,
+    "failed": 0
+  }
+}

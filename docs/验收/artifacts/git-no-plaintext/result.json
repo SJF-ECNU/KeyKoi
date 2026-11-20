@@ -1,0 +1,63 @@
+{
+  "phase": "git-no-plaintext",
+  "environment": {
+    "os": "macOS 27.0 arm64",
+    "git": "git version 2.51.1"
+  },
+  "checks": [
+    {
+      "status": "PASS",
+      "name": "helper entry contains no real password",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "helper mints only an intermediary token",
+      "detail": "kks_"
+    },
+    {
+      "status": "PASS",
+      "name": "helper output has no real password",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "git clone succeeds",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "cloned content is correct",
+      "detail": "hello-keykoi"
+    },
+    {
+      "status": "PASS",
+      "name": "clone traffic reached the repository",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "repository never saw the intermediary token",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "git supplied credentials without an unauthenticated retry",
+      "detail": "0"
+    },
+    {
+      "status": "PASS",
+      "name": "clone without the rewrite cannot reach the fixture",
+      "detail": "1"
+    },
+    {
+      "status": "PASS",
+      "name": "git credential store was never created",
+      "detail": "1"
+    }
+  ],
+  "summary": {
+    "total": 10,
+    "failed": 0
+  }
+}
