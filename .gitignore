@@ -1,0 +1,36 @@
+# 构建产物与本地运行时状态不进入版本库。
+# 验收脚本会在仓库根目录构建这些二进制；它们可由源码重现。
+/keykoi
+/keykoid
+/keykoi-central
+/githttp
+/mockupstream
+*.test
+*.dSYM/
+
+# 本机运行目录：socket、数据库、日志与锁文件。
+.codegraph/
+*.sock
+*.pid
+keykoid.log
+admin.token
+/data/
+
+# 密钥库与备份文件（无论由测试还是本机操作产生）。
+*.db
+*.db-wal
+*.db-shm
+*.backup
+*.snapshot.enc
+snapshot.key
+
+# Xcode 衍生数据（打包脚本按需重建）。
+packaging/macos/biometric-app/build/
+packaging/macos/*.app/
+DerivedData/
+
+# 编辑器与系统杂项。
+.DS_Store
+.idea/
+.vscode/
+*.swp
