@@ -9,6 +9,7 @@ LABEL="${KEYKOI_LABEL:-com.keykoi.keykoid}"
 GATEWAY="${KEYKOI_GATEWAY:-127.0.0.1:8377}"
 ADMIN="${KEYKOI_ADMIN:-127.0.0.1:8378}"
 LOAD=1
+PLIST_DIR="$HOME/Library/LaunchAgents"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -17,6 +18,7 @@ while [ $# -gt 0 ]; do
     --gateway) GATEWAY="$2"; shift 2 ;;
     --admin) ADMIN="$2"; shift 2 ;;
     --no-load) LOAD=0; shift ;;
+    --plist-dir) PLIST_DIR="$2"; shift 2 ;;
     --pidfile) PIDFILE="$2"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -64,7 +66,7 @@ fi
 # 生物识别 .app（默认部署）：免费 Personal Team 签发的描述文件只有 7 天有效期，
 # 因此助手以已签名的 `KeyKoi Biometric.app` 形式分发，由
 # install-biometric-app.sh 负责「部署 + 临期重建」，install-biometric-renew.sh
-# 负责每周自动续签。这里只做「有构建产物就部署」，没有产物时不算安装失败。
+# 负责每日和登录时检查续签。这里只部署已有产物，没有产物时不算安装失败。
 # 设 KEYKOI_BIOMETRIC_APP=0 可完全跳过这一步。
 BIOMETRIC_APP_HELPER=""
 APP_INSTALL_SCRIPT="$ROOT/packaging/macos/install-biometric-app.sh"
@@ -84,8 +86,8 @@ if [ "${KEYKOI_BIOMETRIC_APP:-1}" != "0" ] && [ -f "$APP_INSTALL_SCRIPT" ]; then
   fi
 fi
 
-PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-mkdir -p "$HOME/Library/LaunchAgents"
+PLIST="$PLIST_DIR/$LABEL.plist"
+mkdir -p "$PLIST_DIR"
 
 # 只有真正部署了 .app 才把 KEYKOI_BIOMETRIC_HELPER 写进 launchd 环境；
 # 否则 keykoid 仍按 <prefix>/bin/keykoi-biometric 或 PATH 查找。

@@ -10,7 +10,7 @@
 # 用法：
 #   bash packaging/macos/install-biometric-app.sh [--build-if-needed|--deploy-only|--status]
 # 选项：
-#   --build-if-needed     现有 .app 的描述文件剩余 <2 天（或缺失/读不出）时调用
+#   --build-if-needed     现有 .app 的描述文件剩余 <3 天（或缺失/读不出）时调用
 #                         build-biometric-app.sh 重建，然后把产物部署到 prefix。
 #                         没有 .app 或描述文件缺失同样视为需要构建。
 #                         这是默认行为（不给模式参数时等价）。
@@ -19,8 +19,10 @@
 #                         不写文件、不构建、不碰 Keychain。
 #   --prefix DIR          部署前缀（默认 $KEYKOI_PREFIX 或 ~/Library/Application Support/KeyKoi）
 #   --team TEAMID         覆盖开发团队（默认 $KEYKOI_DEV_TEAM 或 977QNJU6V6）
-#   --min-days N          剩余天数阈值，低于它就要重建（默认 2）
+#   --min-days N          剩余天数阈值，低于它就要重建（默认 3）
 #   --force-expiry-check  无视剩余天数，强制走一次重建（验收用来模拟临期）
+#   --renew-now           立即向 Apple 申请新描述文件，仅在有效期推进后替换
+#   --background          临期续签失败且不足一天时发送一次系统通知
 #   --derived-data DIR    构建产物目录（默认沿用 build-biometric-app.sh 的默认值）
 #   --log FILE            把本脚本的输出追加到 FILE（LaunchAgent 用）
 #   --print-exe           只输出部署后的助手可执行文件路径
@@ -43,8 +45,7 @@
 #
 # 部署顺序（缺陷 32）：候选 .app 先复制到 prefix 下的暂存目录 → 校验候选的签名、
 # 权限与描述文件（到期时间、TeamID、App ID 全部与 --team 一致才算可用）→ 旧产物
-# 改名挪开 → 暂存目录改名就位（同一文件系统内的 rename）→ 复核新产物 → 最后删掉
-# 旧产物。任何一步失败都保留原安装；绝不用「只是描述文件还在的旧产物」顶替当前助手。
+# 与暂存目录原子交换 → 复核新产物 → 最后清理暂存里的旧产物。失败时保留可恢复的原安装。
 # 状态检查（report_status）的失败一律传播为脚本失败，不会「检查失败仍报成功」。
 # 这里沿用 set -uo pipefail 而不是 set -e：大量探测命令（security/codesign/plutil）
 # 本来就允许失败，失败分支要逐条判断，所以靠显式 exit 传播退出码。
@@ -73,9 +74,12 @@ DEFAULT_PREFIX="$HOME/Library/Application Support/KeyKoi"
 
 TEAM="${KEYKOI_DEV_TEAM:-977QNJU6V6}"
 PREFIX="${KEYKOI_PREFIX:-$DEFAULT_PREFIX}"
-MIN_DAYS="${KEYKOI_BIOMETRIC_RENEW_DAYS:-2}"
+MIN_DAYS="${KEYKOI_BIOMETRIC_RENEW_DAYS:-3}"
 MODE=""
 FORCE_EXPIRY_CHECK=0
+RENEW_NOW=0
+BACKGROUND=0
+SUPERSEDED_CACHE=""
 DERIVED=""
 LOG_FILE=""
 PRINT_EXE=0
@@ -89,6 +93,8 @@ while [ $# -gt 0 ]; do
     --team) TEAM="$2"; shift 2 ;;
     --min-days) MIN_DAYS="$2"; shift 2 ;;
     --force-expiry-check) FORCE_EXPIRY_CHECK=1; shift ;;
+    --renew-now) MODE="build-if-needed"; RENEW_NOW=1; shift ;;
+    --background) BACKGROUND=1; shift ;;
     --derived-data) DERIVED="$2"; shift 2 ;;
     --log) LOG_FILE="$2"; shift 2 ;;
     --print-exe) PRINT_EXE=1; shift ;;
@@ -178,10 +184,7 @@ profile_access_groups() { # profile
 # 签名里实际声明的访问组（形如 <TEAM>.<BUNDLE_ID>）。
 signed_access_group() { # bundle
   codesign -d --entitlements :- "$1" 2>/dev/null \
-    | tr '<' '\n' \
-    | sed -n 's/^string>\(.*\)$/\1/p' \
-    | grep -F ".$BUNDLE_ID" \
-    | head -1
+    | plutil -extract keychain-access-groups.0 raw -o - - 2>/dev/null
 }
 
 # 读 embedded.provisionprofile 的 ExpirationDate。
@@ -258,8 +261,8 @@ report_status() { # exit_code_for_callers? -> prints status, returns 0/2
   elif [ "$REMAINING_SECONDS" -lt "$(min_seconds)" ]; then
     renew_needed=yes; reason="expiring"
   fi
-  if [ "$FORCE_EXPIRY_CHECK" = "1" ] && [ "$app_exists" = "yes" ]; then
-    renew_needed=yes; reason="${reason:-forced}"
+  if [ "$app_exists" = "yes" ] && { [ "$verify" != "ok" ] || [ "$group" != "yes" ] || [ "$team" != "$TEAM" ]; }; then
+    renew_needed=yes; reason="${reason:-invalid-signature}"
   fi
 
   machine "app=$APP" "app: $APP"
@@ -370,8 +373,8 @@ verify_deployed() { # dir
     errs=$((errs+1))
   else
     case "$group_value" in
-      "$TEAM".*) : ;;
-      *) note "校验失败：签名的 keychain-access-groups=$group_value 不属于团队 $TEAM"
+      "$TEAM.$BUNDLE_ID") : ;;
+      *) note "校验失败：签名的访问组 $group_value 与 $TEAM.$BUNDLE_ID 不一致"
          errs=$((errs+1)) ;;
     esac
     profile_groups="$(profile_access_groups "$profile")"
@@ -386,21 +389,31 @@ verify_deployed() { # dir
   [ "$errs" -eq 0 ]
 }
 
+swap_apps() {
+  # macOS renamex_np(RENAME_SWAP) exchanges two bundles without a missing-path interval.
+  /usr/bin/python3 - "$1" "$2" <<'PY'
+import ctypes
+import os
+import sys
+
+rename = ctypes.CDLL(None, use_errno=True).renamex_np
+rename.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+if rename(os.fsencode(sys.argv[1]), os.fsencode(sys.argv[2]), 0x00000002):
+    raise OSError(ctypes.get_errno(), os.strerror(ctypes.get_errno()))
+PY
+}
+
 # 部署顺序（缺陷 32）：暂存写入 → 校验候选 → 原子替换 → 复核 → 清理旧状态。
 # 每一步失败都保留原安装（$APP 保持不变或回滚回来），绝不用「描述文件还在的旧
 # 产物」顶替当前助手，也不允许出现「旧产物已删、新产物未就位」的空档。
-deploy_from() { # source_app description
-  local src="$1" label="$2" staging backup
+deploy_from() { # source_app description [minimum_expiry_epoch]
+  local src="$1" label="$2" minimum_expiry="${3:-0}" staging had_app=no candidate
   [ -d "$src" ] || { note "没有找到构建产物：$src"; return 2; }
   mkdir -p "$PREFIX" || { note "无法创建 $PREFIX"; return 3; }
 
   # 1) 先复制到同前缀下的暂存目录：现有安装此时一个字节都没动。
   staging="$PREFIX/.${BUNDLE_NAME}.new.$$"
-  backup="$PREFIX/.${BUNDLE_NAME}.old.$$"
-  rm -rf "$staging" "$backup"
-  # 顺手清掉上一次被打断（被 kill）留下的暂存目录：它只是一份没装上的副本，
-  # 删掉是安全的；`.old.*` 可能是回滚时唯一的一份旧产物，绝不能碰。
-  find "$PREFIX" -maxdepth 1 -name ".${BUNDLE_NAME}.new.*" -mmin +60 -exec rm -rf {} + 2>/dev/null || true
+  rm -rf "$staging"
   if ! ditto "$src" "$staging"; then
     note "复制失败：$src → $staging"
     rm -rf "$staging"
@@ -413,19 +426,23 @@ deploy_from() { # source_app description
     rm -rf "$staging"
     return 3
   fi
-
-  # 3) 旧产物只改名挪开（同一文件系统内 rename），暂存目录随后改名就位。
-  if [ -e "$APP" ] && ! mv "$APP" "$backup"; then
-    note "替换失败：无法把现有安装移开（$APP → ${backup}）；现有安装保持不变"
-    rm -rf "$staging"
-    return 3
-  fi
-  if ! mv "$staging" "$APP"; then
-    note "替换失败：$staging → ${APP}；回滚到原安装"
-    rm -rf "$APP" 2>/dev/null || true
-    if [ -e "$backup" ] && ! mv "$backup" "$APP"; then
-      note "回滚失败：请手动执行 mv \"$backup\" \"$APP\""
+  if [ "$minimum_expiry" -gt 0 ]; then
+    candidate="$(read_expiry "$staging/Contents/embedded.provisionprofile")" || { rm -rf "$staging"; return 3; }
+    if [ "${candidate##*$'\t'}" -le "$minimum_expiry" ]; then
+      rm -rf "$staging"
+      machine "renew_result=profile-not-extended" "Apple 尚未签发有效期更长的描述文件；保留现有助手，下次检查再试。"
+      return 2
     fi
+  fi
+
+  if [ -e "$APP" ]; then
+    had_app=yes
+    if ! swap_apps "$APP" "$staging"; then
+      note "无法原子替换助手，保留现有安装。"
+      rm -rf "$staging"
+      return 3
+    fi
+  elif ! mv "$staging" "$APP"; then
     rm -rf "$staging"
     return 3
   fi
@@ -433,15 +450,20 @@ deploy_from() { # source_app description
   # 4) 新产物就位后复核一次；不通过则回滚，旧产物此时还在。
   if ! verify_deployed "$APP"; then
     note "部署后复核失败：回滚到原安装"
-    rm -rf "$APP"
-    if [ -e "$backup" ] && ! mv "$backup" "$APP"; then
-      note "回滚失败：请手动执行 mv \"$backup\" \"$APP\""
+    if [ "$had_app" = yes ]; then
+      if ! swap_apps "$APP" "$staging"; then
+        note "回滚失败：旧助手保存在 $staging"
+        return 3
+      fi
+    else
+      rm -rf "$APP"
     fi
+    rm -rf "$staging"
     return 3
   fi
 
   # 5) 最后才清理旧状态。
-  rm -rf "$backup"
+  rm -rf "$staging"
   machine "deployed_app=$APP" "deployed $label → $APP"
   return 0
 }
@@ -481,6 +503,46 @@ run_build() {
     return 2
   fi
   return 0
+}
+
+renew_build() {
+  local uuid cache saved rc=0
+  uuid="$(profile_field "$PROFILE" UUID)" || { run_build; return $?; }
+  case "$uuid" in *[!0-9a-fA-F-]*|'') run_build; return $? ;; esac
+  cache="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/$uuid.provisionprofile"
+  [ -f "$cache" ] || cache="$HOME/Library/MobileDevice/Provisioning Profiles/$uuid.provisionprofile"
+  if ! cmp -s "$PROFILE" "$cache"; then run_build; return $?; fi
+  saved="$(mktemp -d "${TMPDIR:-/tmp}/keykoi-profile.XXXXXX")" || return 2
+  if ! mv "$cache" "$saved/installed.provisionprofile"; then rmdir "$saved"; return 2; fi
+  # Refresh only the byte-identical cache entry. The installed bundle keeps its own profile.
+  restore_cached_profile() {
+    if [ ! -e "$cache" ]; then
+      mv "$saved/installed.provisionprofile" "$cache" || return 1
+    else
+      rm -f "$saved/installed.provisionprofile"
+    fi
+    rmdir "$saved"
+  }
+  trap 'restore_cached_profile' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  run_build || rc=$?
+  restore_cached_profile || note "原缓存保存在 $saved/installed.provisionprofile"
+  trap - EXIT INT TERM
+  if [ "$rc" -eq 0 ] && [ "$(profile_field "$cache" UUID)" = "$uuid" ] &&
+      [ "$(profile_field "$cache" ExpirationDate)" = "$EXPIRY_RAW" ]; then
+    SUPERSEDED_CACHE="$cache"
+  fi
+  return "$rc"
+}
+
+notify_renewal_problem() {
+  [ "$BACKGROUND" = 1 ] && [ -n "$EXPIRY_EPOCH" ] && [ "$REMAINING_SECONDS" -le 86400 ] || return 0
+  local notice="$PREFIX/data/biometric-renew-alerted"
+  [ "$(cat "$notice" 2>/dev/null)" != "$EXPIRY_EPOCH" ] || return 0
+  if /usr/bin/osascript -e 'display notification "请检查 Xcode 的 Apple 账户登录。Touch ID 到期后可用主密码解锁。" with title "KeyKoi Touch ID 续签待处理"' >/dev/null 2>&1; then
+    printf '%s\n' "$EXPIRY_EPOCH" > "$notice"
+  fi
 }
 
 # 部署后的统一收尾：report_status 打全套状态，并把它的退出码原样传播出去。
@@ -542,7 +604,7 @@ elif ! compute_remaining "$PROFILE"; then
 elif [ "$REMAINING_SECONDS" -lt "$(min_seconds)" ]; then
   NEED=yes
 fi
-if [ "$FORCE_EXPIRY_CHECK" = "1" ]; then NEED=yes; fi
+if [ "$FORCE_EXPIRY_CHECK" = "1" ] || [ "$RENEW_NOW" = "1" ]; then NEED=yes; fi
 
 if [ "$NEED" = "yes" ]; then
   if [ -n "${EXPIRY_RAW:-}" ]; then
@@ -550,8 +612,26 @@ if [ "$NEED" = "yes" ]; then
   else
     note "没有可用的 KeyKoi Biometric.app / 描述文件 → 构建"
   fi
-  run_build || { machine "install_biometric_app=manual" "install_biometric_app=manual"; exit 2; }
-  deploy_from "$BUILT_APP" "新构建的 .app" || exit $?
+  minimum_expiry=0
+  if [ -n "$REMAINING_SECONDS" ] && [ "$REMAINING_SECONDS" -gt 0 ] &&
+      { [ "$RENEW_NOW" = "1" ] || [ "$REMAINING_SECONDS" -lt "$(min_seconds)" ]; } && verify_deployed "$APP"; then
+    minimum_expiry="$EXPIRY_EPOCH"
+    renew_build || { machine "install_biometric_app=manual" "install_biometric_app=manual"; notify_renewal_problem; exit 2; }
+  else
+    run_build || { machine "install_biometric_app=manual" "install_biometric_app=manual"; notify_renewal_problem; exit 2; }
+  fi
+  deploy_from "$BUILT_APP" "新构建的 .app" "$minimum_expiry" || {
+    rc=$?
+    machine "install_biometric_app=failed" "本次未部署新助手，下次检查再试。"
+    notify_renewal_problem
+    exit "$rc"
+  }
+  if [ -n "$SUPERSEDED_CACHE" ]; then
+    archive="$PREFIX/data/biometric-profiles"
+    if (umask 077; mkdir -p "$archive") && [ ! -e "$archive/${SUPERSEDED_CACHE##*/}" ]; then
+      mv "$SUPERSEDED_CACHE" "$archive/" || note "旧描述文件仍在 Xcode 缓存，下一次检查会再次尝试续签。"
+    fi
+  fi
   # 状态同时进日志：续签日志里要能看到新的到期时间；退出码跟状态一致。
   conclude_after_deploy "build-if-needed"
   exit $?

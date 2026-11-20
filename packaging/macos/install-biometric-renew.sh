@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# 用 LaunchAgent 每周自动续签 `KeyKoi Biometric.app` 的描述文件。
+# 用 LaunchAgent 每天检查 `KeyKoi Biometric.app` 的描述文件。
 #
 # 背景：免费 Apple ID（Personal Team）签发的描述文件只有 7 天有效期，过期后
 # AMFI 会拒绝启动带 `keychain-access-groups` 的助手，keykoid 报 AUTH_UNAVAILABLE。
-# 本脚本安装一个 `com.keykoi.biometric-renew` 代理，每周跑一次
+# 本脚本安装一个 `com.keykoi.biometric-renew` 代理，每天及登录时运行
 # `install-biometric-app.sh --build-if-needed`：临期才重建（xcodebuild
 # -allowProvisioningUpdates 需要联网向 Apple 重新签发描述文件），不临期只写日志。
 #
@@ -13,10 +13,10 @@
 #   --install        生成并加载 LaunchAgent（默认动作）
 #   --uninstall      卸载 LaunchAgent 并删除 plist（保留日志）
 #   --status         打印 plist 路径、是否已加载、schedule、日志位置、下次触发时间
-#   --run-now        立即触发一次（launchctl kickstart -k），用于人工验证；不等待一周
+#   --run-now        立即触发一次并检查结果，不中断已经开始的任务
 #   --prefix DIR     部署前缀（默认 $KEYKOI_PREFIX 或 ~/Library/Application Support/KeyKoi）
 #   --label LABEL    LaunchAgent 标签（默认 com.keykoi.biometric-renew）
-#   --weekday N      Calendar 星期几，1=周日 … 7=周六（默认 1，每周一次）
+#   --weekday N      可选的每周调度，1=周日 … 7=周六（默认每日）
 #   --hour N         触发小时（默认 3）
 #   --minute N       触发分钟（默认 17）
 #   --team TEAMID    传给 install-biometric-app.sh 的团队（默认 $KEYKOI_DEV_TEAM 或 977QNJU6V6）
@@ -25,8 +25,8 @@
 #   -h|--help        显示本帮助
 #
 # 退出码：
-#   0  成功（安装/卸载/状态/立即运行都返回 0；立即运行的脚本结果看日志与 status）
-#   2  launchctl 操作失败（plist 已写好，日志里有原因）
+#   0  成功
+#   2  launchctl 操作失败、续签未完成或等待超时
 #   5  环境不可用（非 macOS）
 #
 # launchd 环境说明：代理运行时不会加载 shell 启动文件，HOME/PATH/DEVELOPER_DIR
@@ -42,7 +42,7 @@ BUNDLE_NAME="KeyKoi Biometric.app"
 LABEL="com.keykoi.biometric-renew"
 PREFIX="${KEYKOI_PREFIX:-$HOME/Library/Application Support/KeyKoi}"
 TEAM="${KEYKOI_DEV_TEAM:-977QNJU6V6}"
-WEEKDAY=1
+WEEKDAY=""
 HOUR=3
 MINUTE=17
 ACTION="install"
@@ -66,6 +66,10 @@ while [ $# -gt 0 ]; do
     *) echo "unknown option: $1" >&2; exit 5 ;;
   esac
 done
+case "$WEEKDAY" in
+  ""|[1-7]) ;;
+  *) echo "--weekday 须在 1 至 7 之间" >&2; exit 2 ;;
+esac
 
 say() { printf '%s\n' "$*"; }
 note() { printf '%s\n' "$*" >&2; }
@@ -100,8 +104,6 @@ case "$ACTION" in
     machine "plist_exists=$([ -f "$PLIST" ] && echo yes || echo no)" "plist exists: $([ -f "$PLIST" ] && echo yes || echo no)"
     machine "loaded=$(is_loaded && echo yes || echo no)" "loaded: $(is_loaded && echo yes || echo no)"
     machine "app_script=$APP_SCRIPT" "app script: $APP_SCRIPT"
-    machine "weekday=$WEEKDAY" "schedule: 每$(weekday_name "$WEEKDAY") $(printf '%02d:%02d' "$HOUR" "$MINUTE")"
-    machine "schedule=$(printf 'weekday=%s hour=%s minute=%s' "$WEEKDAY" "$HOUR" "$MINUTE")" "schedule: weekday=$WEEKDAY hour=$HOUR minute=${MINUTE}（每周一次）"
     machine "log=$LOG" "log: $LOG"
     machine "log_exists=$([ -f "$LOG" ] && echo yes || echo no)" "log exists: $([ -f "$LOG" ] && echo yes || echo no)"
     NEXT="unknown"
@@ -113,14 +115,14 @@ import datetime, plistlib, sys
 with open(sys.argv[1], "rb") as handle:
     body = plistlib.load(handle)
 sched = body.get("StartCalendarInterval") or {}
-weekday = int(sched.get("Weekday", 1))
+weekday = sched.get("Weekday")
 hour = int(sched.get("Hour", 0))
 minute = int(sched.get("Minute", 0))
-py_weekday = (weekday - 2) % 7  # Calendar: 1=周日 … 7=周六 → Python: 0=周一
+py_weekday = None if weekday is None else (int(weekday) - 1) % 7
 now = datetime.datetime.now()
 for offset in range(8):
     day = (now + datetime.timedelta(days=offset)).date()
-    if day.weekday() == py_weekday:
+    if py_weekday is None or day.weekday() == py_weekday:
         candidate = datetime.datetime.combine(day, datetime.time(hour, minute))
         if candidate > now:
             print(candidate.strftime("%Y-%m-%d %H:%M"))
@@ -129,6 +131,12 @@ else:
     print("unknown")
 PYNEXT
 )"
+      minute="$(plutil -extract StartCalendarInterval.Minute raw -o - "$PLIST")"
+      hour="$(plutil -extract StartCalendarInterval.Hour raw -o - "$PLIST")"
+      weekday="$(plutil -extract StartCalendarInterval.Weekday raw -o - "$PLIST" 2>/dev/null || true)"
+      day="每天"
+      [ -z "$weekday" ] || day="每$(weekday_name "$((weekday % 7 + 1))")"
+      machine "schedule=weekday=${weekday:-daily} hour=$hour minute=$minute" "已安装调度：$day $(printf '%02d:%02d' "$hour" "$minute")"
     fi
     machine "next_fire=$NEXT" "next fire: $NEXT"
     exit 0
@@ -155,6 +163,35 @@ PYNEXT
     exit 0
     ;;
 esac
+
+if [ "$ACTION" = "run-now" ]; then
+  if ! is_loaded; then
+    note "$LABEL 没有加载，先执行 --install"
+    exit 2
+  fi
+  BEFORE=0
+  [ -f "$LOG" ] && BEFORE="$(wc -l <"$LOG" | tr -d ' ')"
+  if ! launchctl kickstart "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+    note "launchctl kickstart 失败"
+    exit 2
+  fi
+  machine "kickstart=ok" "已触发 ${LABEL}，等待 install-biometric-app.sh 收尾标记..."
+  # install-biometric-app.sh 末尾总会打 install_biometric_app=ok|manual|unavailable。
+  deadline=$(( $(date +%s) + 600 ))
+  result="timeout"
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if [ -f "$LOG" ]; then
+      tail -n +"$((BEFORE + 1))" "$LOG" 2>/dev/null | grep -q '^install_biometric_app=' && {
+        result="$(tail -n +"$((BEFORE + 1))" "$LOG" | sed -n 's/^install_biometric_app=//p' | tail -1)"
+        break
+      }
+    fi
+    sleep 1
+  done
+  machine "run_result=$result" "run result: ${result}（日志 ${LOG}）"
+  if [ "$result" = "ok" ]; then exit 0; fi
+  exit 2
+fi
 
 if [ ! -f "$APP_SCRIPT" ]; then
   note "缺少 $APP_SCRIPT"
@@ -183,12 +220,17 @@ team = "$TEAM"
 log = "$LOG"
 app_script = "$APP_SCRIPT"
 
+calendar = {"Hour": int("$HOUR"), "Minute": int("$MINUTE")}
+if "$WEEKDAY":
+    calendar["Weekday"] = int("$WEEKDAY") - 1
+
 body = {
     "Label": label,
     "ProgramArguments": [
         "/bin/bash",
         app_script,
         "--build-if-needed",
+        "--background",
         "--prefix",
         prefix,
         "--team",
@@ -201,12 +243,8 @@ body = {
         "KEYKOI_DEV_TEAM": team,
         "KEYKOI_PREFIX": prefix,
     },
-    "StartCalendarInterval": {
-        "Weekday": int("$WEEKDAY"),
-        "Hour": int("$HOUR"),
-        "Minute": int("$MINUTE"),
-    },
-    "RunAtLoad": False,
+    "StartCalendarInterval": calendar,
+    "RunAtLoad": True,
     "ProcessType": "Background",
     "StandardOutPath": log,
     "StandardErrorPath": log,
@@ -243,7 +281,9 @@ if [ "$DO_LOAD" = "1" ]; then
     sleep 0.3
   done
   if [ "$ok" = "1" ]; then
-    machine "loaded=yes" "已加载 ${LABEL}（每$(weekday_name "$WEEKDAY") $(printf '%02d:%02d' "$HOUR" "$MINUTE")）"
+    day="天"
+    [ -z "$WEEKDAY" ] || day="$(weekday_name "$WEEKDAY")"
+    machine "loaded=yes" "已加载 ${LABEL}（每${day} $(printf '%02d:%02d' "$HOUR" "$MINUTE")，登录时也检查）"
   else
     note "launchctl bootstrap 失败：$(cat "$PREFIX/data/biometric-renew.bootstrap.err" 2>/dev/null)"
     machine "loaded=no" "bootstrap 失败"
@@ -251,34 +291,6 @@ if [ "$DO_LOAD" = "1" ]; then
   fi
 fi
 
-if [ "$ACTION" = "run-now" ]; then
-  if ! is_loaded; then
-    note "$LABEL 没有加载，先执行 --install"
-    exit 2
-  fi
-  BEFORE=0
-  [ -f "$LOG" ] && BEFORE="$(wc -l <"$LOG" | tr -d ' ')"
-  if ! launchctl kickstart -k "$DOMAIN/$LABEL" >/dev/null 2>&1; then
-    note "launchctl kickstart 失败"
-    exit 2
-  fi
-  machine "kickstart=ok" "已触发 ${LABEL}，等待 install-biometric-app.sh 收尾标记..."
-  # install-biometric-app.sh 末尾总会打 install_biometric_app=ok|manual|unavailable。
-  deadline=$(( $(date +%s) + 600 ))
-  result="timeout"
-  while [ "$(date +%s)" -lt "$deadline" ]; do
-    if [ -f "$LOG" ]; then
-      tail -n +"$((BEFORE + 1))" "$LOG" 2>/dev/null | grep -q '^install_biometric_app=' && {
-        result="$(tail -n +"$((BEFORE + 1))" "$LOG" | sed -n 's/^install_biometric_app=//p' | tail -1)"
-        break
-      }
-    fi
-    sleep 1
-  done
-  machine "run_result=$result" "run result: ${result}（日志 ${LOG}）"
-  if [ "$result" = "ok" ]; then exit 0; fi
-  exit 0
-fi
 
 machine "action=$ACTION" "完成：$LABEL"
 exit 0

@@ -9,7 +9,7 @@
 #     部署产物通过 codesign --verify 且签名含 keychain-access-groups；
 #   · install.sh：默认部署 .app 并把 KEYKOI_BIOMETRIC_HELPER 写进 keykoid 的
 #     launchd plist（KEYKOI_BIOMETRIC_APP=0 时不写）；plist 通过 plutil -lint；
-#   · install-biometric-renew.sh：生成并加载 com.keykoi.biometric-renew（每周一次），
+#   · install-biometric-renew.sh：生成并加载 com.keykoi.biometric-renew（每日及登录时），
 #     plist 语义正确（ProgramArguments / EnvironmentVariables / 日志路径）、
 #     plutil -lint 通过、--run-now 在 launchd 环境里跑完并写日志、可卸载；
 #   · 脚本不触碰用户 Keychain 条目（不出现助手的 store/load/delete）。
@@ -169,7 +169,7 @@ notes = [
     "描述文件仍在有效期内时，Xcode 会复用已有描述文件，重建不会提前推进 ExpirationDate（本次实测重建前后都是同一个到期时间）；只有过期或缺失时才会拿到新的 7 天窗口，所以验收用「删除 embedded.provisionprofile」来验证重新签发。",
     "install-biometric-app.sh 用 security cms -D -i 读出 embedded.provisionprofile 的 ExpirationDate，剩余 <2 天（KEYKOI_BIOMETRIC_RENEW_DAYS 可调）或缺失时才重建，避免每次安装都联网重签。",
     "验收用 --force-expiry-check 模拟临期、用删除 embedded.provisionprofile 模拟描述文件缺失，两者都触发真实 xcodebuild 重建，不实际等待 7 天。",
-    "LaunchAgent 用 StartCalendarInterval 每周触发一次；launchd 不加载 shell 启动文件，所以 plist 显式写入 HOME / PATH / DEVELOPER_DIR / KEYKOI_DEV_TEAM，xcodebuild -allowProvisioningUpdates 才能读到登录钥匙串里的 Apple Development 身份。",
+    "LaunchAgent 每天及登录时检查；plist 显式写入 HOME / PATH / DEVELOPER_DIR / KEYKOI_DEV_TEAM。",
     "所有构建、部署、LaunchAgent 都在临时 prefix（%s）与临时 HOME 下进行，LaunchAgent 标签带验收 PID 后缀，结束时 bootout 并清理。" % prefix,
     "install-biometric-app.sh 不调用助手的 store/load/delete，验收断言脚本里没有这些子命令调用，即不触碰用户 Keychain 条目。",
 ]
@@ -177,7 +177,7 @@ notes = [
 manual_steps = [
     "真实 Touch ID 手势（enroll 与 unlock 各一次）仍需人工在会弹指纹框的机器上点按；本次验收只覆盖部署、续签与签名校验。",
     "如需把到期时间真正推进到新的 7 天窗口，请在描述文件已过期或即将过期时执行：bash packaging/macos/install-biometric-app.sh --build-if-needed（Xcode 需已登录且能访问 developer.apple.com）。",
-    "每周自动续签已安装到用户 LaunchAgents 时可长期运行：bash packaging/macos/install-biometric-renew.sh --install；验收用的是带 PID 后缀的一次性标签。",
+    "后台续签代理安装入口为 bash packaging/macos/install-biometric-renew.sh --install；验收使用独立的一次性标签。",
 ]
 for row in manual_rows:
     manual_steps.append("手工待办：%s — %s" % (row["name"], row["detail"]))
@@ -256,7 +256,7 @@ result = {
         },
         "log": log_renew,
         "log_has_marker": "install_biometric_app=" in text(log_renew),
-        "note": "调度是每周一次；验收只检查 plist 语义 + 一次 launchctl kickstart，不等待一周。",
+        "note": "默认每天和登录时执行；验收检查 plist 语义并实际触发 launchctl kickstart。",
     },
     "summary": {
         "total": len(checks),
@@ -406,12 +406,33 @@ contains "manual 指引给出重建命令" "--build-if-needed" "$(cat "$MANUAL_E
 check "构建失败不影响已部署的 .app" "yes" \
   "$([ -x "$PREFIX/KeyKoi Biometric.app/Contents/MacOS/keykoi-biometric" ] && echo yes || echo no)"
 
+log "== 临期复用同一描述文件：保留旧助手 =="
+cat >"$WORK/reused-build.sh" <<'STUB'
+#!/usr/bin/env bash
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --status-file ]; then
+    printf 'app=%s\n' "$KEYKOI_TEST_EXISTING_APP" >"$2"
+    exit 0
+  fi
+  shift
+done
+exit 3
+STUB
+CURRENT_APP="$PREFIX/KeyKoi Biometric.app"
+BEFORE_INODE="$(stat -f %i "$CURRENT_APP")"
+env HOME="$REAL_HOME" KEYKOI_TEST_EXISTING_APP="$CURRENT_APP" KEYKOI_BIOMETRIC_BUILD_SCRIPT="$WORK/reused-build.sh" \
+  bash "$APP_SCRIPT" --build-if-needed --prefix "$PREFIX" --team "$TEAM" --min-days 8 \
+  >"$WORK/reused.out" 2>"$WORK/reused.err"
+check "临期复用同一描述文件返回待重试" "2" "$?"
+contains "临期复用明确报告有效期未推进" "renew_result=profile-not-extended" "$(cat "$WORK/reused.out")"
+check "临期复用保持现有助手目录" "$BEFORE_INODE" "$(stat -f %i "$CURRENT_APP")"
+
 log "== install.sh：默认部署 .app 并写入 KEYKOI_BIOMETRIC_HELPER =="
 INST_PREFIX="$WORK/install-prefix"
 GOENV_CACHE="$REAL_HOME/Library/Caches/go-build"
 GOENV_MOD="$(go env GOMODCACHE 2>/dev/null || true)"
-env HOME="$WORK/home" GOCACHE="$GOENV_CACHE" GOMODCACHE="${GOENV_MOD:-}" \
-  bash "$INSTALL_SCRIPT" --prefix "$INST_PREFIX" --label "$LABEL_KEYKOID" --no-load \
+env HOME="$REAL_HOME" GOCACHE="$GOENV_CACHE" GOMODCACHE="${GOENV_MOD:-}" \
+  bash "$INSTALL_SCRIPT" --prefix "$INST_PREFIX" --label "$LABEL_KEYKOID" --no-load --plist-dir "$(dirname "$APP_PLIST")" \
   >"$WORK/install.out" 2>"$WORK/install.err"
 INSTALL_CODE=$?
 check "install.sh 退出码" "0" "$INSTALL_CODE"
@@ -461,10 +482,11 @@ check "续签 plist 已生成" "yes" "$([ -f "$RENEW_PLIST" ] && echo yes || ech
 plutil -lint "$RENEW_PLIST" >"$WORK/renew-lint.log" 2>&1
 RENEW_LINT=$?
 check "续签 plist 通过 plutil -lint" "0" "$RENEW_LINT"
-contains "续签 plist 写入每周调度 StartCalendarInterval" "StartCalendarInterval" \
+contains "续签 plist 写入每日调度 StartCalendarInterval" "StartCalendarInterval" \
   "$(plutil -p "$RENEW_PLIST" 2>/dev/null || true)"
-check "续签调度为每周一次（Weekday 1）" "1" \
-  "$(plutil -extract StartCalendarInterval.Weekday raw -o - "$RENEW_PLIST" 2>/dev/null)"
+check "续签调度每天执行，不限制 Weekday" "" \
+  "$(plutil -extract StartCalendarInterval.Weekday raw -o - "$RENEW_PLIST" 2>/dev/null || true)"
+check "登录时也检查描述文件" "true" "$(plutil -extract RunAtLoad raw -o - "$RENEW_PLIST")"
 contains "续签命令是 install-biometric-app.sh --build-if-needed" "--build-if-needed" \
   "$(plutil -p "$RENEW_PLIST" 2>/dev/null || true)"
 contains "续签命令指向 install-biometric-app.sh" "install-biometric-app.sh" \
@@ -481,6 +503,10 @@ check "续签代理已加载" "yes" "$(launchctl print "gui/$(id -u)/$LABEL_RENE
 
 # 删掉部署里的描述文件，让 launchd 任务必须真的重建一次：
 # 这样 --run-now 同时证明「launchd 环境里 xcodebuild -allowProvisioningUpdates 能自动签名」。
+for _ in $(seq 1 50); do
+  grep -q '^install_biometric_app=' "$LOG_RENEW" 2>/dev/null && break
+  sleep 0.1
+done
 rm -f "$PREFIX/KeyKoi Biometric.app/Contents/embedded.provisionprofile"
 bash "$RENEW_SCRIPT" --run-now --prefix "$PREFIX" --label "$LABEL_RENEW" --plist-dir "$WORK/agents" \
   >"$RENEW_RUN" 2>"$WORK/renew-run.err"

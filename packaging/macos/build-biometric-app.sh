@@ -173,7 +173,7 @@ set -e
 
 if [ "$BUILD_CODE" -ne 0 ]; then
   CLASS="build-failed"
-  if grep -qE "There are no accounts registered with Xcode|No Account for Team|No signing certificate|Signing for .* requires a development team" "$LOG"; then
+  if grep -qE "No Accounts:|There are no accounts registered with Xcode|No Account for Team|No signing certificate|Signing for .* requires a development team" "$LOG"; then
     CLASS="apple-id"
   elif grep -qiE "does(n't| not) support the Keychain Sharing capability|does not include the keychain-access-groups entitlement|Keychain Sharing" "$LOG"; then
     CLASS="keychain-sharing"
