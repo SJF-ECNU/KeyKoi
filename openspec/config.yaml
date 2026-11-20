@@ -1,0 +1,5 @@
+schema: spec-driven
+context: |
+  KeyKoi 是本机优先的凭证中介。设计来源是根目录的 KeyKoi_Implementation_Plan_v0.1.md，阶段与依赖见 openspec/roadmap.md。
+  采用 Go，单机使用应用层加密的 SQLite。设计能力及兼容性按实际验证结果记录。测试和报告不包含真实业务凭证。
+  本轮验收仅使用当前 Mac 的原生 macOS 环境。Linux 文件专项与 Windows 验收延期。中心功能在同一 Mac 上用独立进程验证，详见路线图。
