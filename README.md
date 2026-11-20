@@ -61,7 +61,7 @@ keykoi grant revoke --id "$GRANT_ID"
 
 ## 项目状态与开发
 
-macOS 的单机保险库、控制台、Git/SSH、云 CLI 和数据库代理具备验收记录。测试覆盖范围随协议和工具版本而异。Linux 文件隔离、Windows 和多设备跨主机部署仍待完整验收。模型服务的 API Key 由调用方自行管理。
+macOS 的单机保险库、控制台、Git/SSH、云 CLI 和数据库代理具备验收记录。测试覆盖范围随协议和工具版本而异。Linux 文件隔离、Windows 和多设备跨主机部署仍待完整验收。
 
 ```bash
 go build ./...
