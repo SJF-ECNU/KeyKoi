@@ -265,9 +265,9 @@ func tokenConfigFromVersion(scheme model.AuthScheme, version model.CredentialVer
 			"auth scheme %q is not an OAuth token scheme", scheme)
 	}
 
-	if err := validateTokenEndpoint(cfg.Endpoint); err != nil {
+	if err := oauth.ValidateTokenEndpoint(cfg.Endpoint); err != nil {
 		return cfg, model.WrapError(model.CodeCredentialUnavailable, err,
-			"credential %s version %d: %s is not a usable absolute http(s) URL",
+			"credential %s version %d: %s requires a valid HTTPS endpoint",
 			version.CredentialID, version.Version, fieldNameForEndpoint(scheme))
 	}
 	return cfg, nil
@@ -278,17 +278,6 @@ func fieldNameForEndpoint(scheme model.AuthScheme) string {
 		return fieldTokenURI
 	}
 	return fieldTokenEndpoint
-}
-
-func validateTokenEndpoint(raw string) error {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return err
-	}
-	if u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return model.NewError(model.CodeCredentialUnavailable, "endpoint must be an absolute http(s) URL")
-	}
-	return nil
 }
 
 // tokenStatusError 把 token 端点的非 2xx 响应分类：

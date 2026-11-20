@@ -26,6 +26,7 @@ trap cleanup EXIT
 
 cd "$ROOT"
 log "building binaries"
+GO_VERSION="$(go version | awk '{print $3}')"
 go build -o "$BIN/keykoi" ./cmd/keykoi
 go build -o "$BIN/keykoid" ./cmd/keykoid
 go build -o "$BIN/oauthtoken" ./tests/fixtures/oauthtoken
@@ -77,7 +78,7 @@ BAD_CLIENT_SECRET="keykoi-wrong-secret-$(openssl rand -hex 6)"
 log "fixture=$FIXTURE token_endpoint=$TOKEN_ENDPOINT"
 
 log "starting keykoid (encrypted vault)"
-"$BIN/keykoid" --data-dir "$DATA" --gateway 127.0.0.1:0 --admin 127.0.0.1:0 >"$WORK/keykoid.log" 2>&1 &
+KEYKOI_OAUTH_ALLOW_LOOPBACK_HTTP=1 "$BIN/keykoid" --data-dir "$DATA" --gateway 127.0.0.1:0 --admin 127.0.0.1:0 >"$WORK/keykoid.log" 2>&1 &
 KEYKOID_PID=$!
 for _ in $(seq 1 100); do "$BIN/keykoi" status >/dev/null 2>&1 && break; sleep 0.1; done
 GW="$("$BIN/keykoi" --json status | python3 -c 'import json,sys;print(json.load(sys.stdin)["gateway"])')"
@@ -237,7 +238,7 @@ check "keykoid log contains no access token, client_secret or private key" "0" "
 check "keykoid log contains no signed JWT assertion" "0" "$(grep -c 'eyJ' "$WORK/keykoid.log" || true)"
 check "fixture never saw an intermediary session token" "0" "$(grep -c 'kks_' "$WORK/provider.log" || true)"
 
-ENVIRONMENT="$(uname -sm) / $(go version | awk '{print $3}') / openssl $(openssl version | awk '{print $2}')"
+ENVIRONMENT="$(uname -sm) / $GO_VERSION / openssl $(openssl version | awk '{print $2}')"
 python3 - "$OUT_DIR/result.json" "$ENVIRONMENT" "$GW" "${CHECK_RESULTS[@]}" <<'PY'
 import json, sys
 out = {

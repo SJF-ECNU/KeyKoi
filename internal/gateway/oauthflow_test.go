@@ -22,6 +22,7 @@ import (
 	"keykoi/internal/broker"
 	"keykoi/internal/gateway"
 	"keykoi/internal/model"
+	"keykoi/internal/oauth"
 	"keykoi/internal/secret"
 	"keykoi/internal/store"
 )
@@ -53,6 +54,7 @@ type tokenEndpoint struct {
 }
 
 func newTokenEndpoint(t *testing.T, clientID, clientSecret string) *tokenEndpoint {
+	t.Setenv(oauth.LoopbackHTTPEnv, "1")
 	t.Helper()
 	te := &tokenEndpoint{expiresIn: 3600}
 	te.server = httptest.NewServer(http.HandlerFunc(te.handle))
@@ -485,6 +487,16 @@ func TestOAuthJWTBearerAssertion(t *testing.T) {
 	}
 	if auths := s.upstreamAuths(); len(auths) != 1 || auths[0] != "Bearer "+te.lastIssued() {
 		t.Fatalf("upstream authorization: got %v", auths)
+	}
+}
+
+func TestOAuthGatewayRequiresSecureTokenEndpoint(t *testing.T) {
+	t.Setenv(oauth.LoopbackHTTPEnv, "")
+	fields := clientCredentialsFields("http://127.0.0.1:1/token", "client", "test-secret", nil)
+	s := newOAuthStack(t, model.AuthOAuthClientCredentials, fields)
+	resp, body := s.request()
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(errorMessage(t, body), "requires a valid HTTPS endpoint") {
+		t.Fatalf("expected HTTPS policy rejection, got %d: %s", resp.StatusCode, body)
 	}
 }
 

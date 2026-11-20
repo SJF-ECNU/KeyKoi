@@ -230,6 +230,16 @@ func (s *Service) tokenHTTPClient() (*http.Client, error) {
 //   - 明文 http：只有显式打开 AllowLoopbackHTTP 且主机是回环地址时允许；
 //   - 其他 scheme 与缺少主机的 URL 一律拒绝。
 func (s *Service) endpointURL(field, raw string) (*url.URL, error) {
+	return endpointURL(field, raw, s.AllowLoopbackHTTP)
+}
+
+// ValidateTokenEndpoint applies the same transport policy to gateway token exchanges.
+func ValidateTokenEndpoint(raw string) error {
+	_, err := endpointURL(FieldTokenEndpoint, raw, loopbackHTTPFromEnv())
+	return err
+}
+
+func endpointURL(field, raw string, allowLoopbackHTTP bool) (*url.URL, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Host == "" {
 		return nil, configError("%s %q is not an absolute URL", field, raw)
@@ -238,7 +248,7 @@ func (s *Service) endpointURL(field, raw string) (*url.URL, error) {
 	case "https":
 		return u, nil
 	case "http":
-		if !s.AllowLoopbackHTTP {
+		if !allowLoopbackHTTP {
 			return nil, configError("%s %q must use https; plaintext http requires an explicit loopback opt-in", field, raw)
 		}
 		if !isLoopbackHost(u.Hostname()) {
