@@ -1,0 +1,27 @@
+schema_version: 1
+id: aws-cli-helper
+adapter_version: 1
+status: verified
+
+# 真实工具的定位来自受信安装记录；路径按本机实际安装位置登记。
+tool:
+  executable_ref: installations.aws_cli
+  executable: /opt/homebrew/bin/aws
+  supported_os: [macos]
+  verified_versions: ["2.41.0"]
+
+credential:
+  binding_ref: bind_aws_cli
+  delivery_mode: runtime_delivery
+
+integration:
+  mechanism: helper_config
+  config_path: "~/.aws/config"
+  section: "profile keykoi"
+  managed_key: credential_process
+  helper_args: ["helper", "aws", "--binding", "bind_aws_cli"]
+  verify_args: ["--profile", "keykoi", "sts", "get-caller-identity", "--endpoint-url", "{{upstream}}"]
+
+lifecycle:
+  plaintext_disk_fallback: false
+  persist_session_token: false

@@ -1,0 +1,28 @@
+schema_version: 1
+id: aws-cli-env
+adapter_version: 1
+status: experimental
+
+# 仅支持环境变量的启动路径：不写普通配置文件，运行器按声明注入。
+tool:
+  executable_ref: installations.aws_cli
+  executable: /opt/homebrew/bin/aws
+  supported_os: [macos]
+  verified_versions: ["2.41.0"]
+
+credential:
+  binding_ref: bind_aws_env
+  delivery_mode: runtime_delivery
+
+integration:
+  mechanism: env_launcher
+  env:
+    AWS_ACCESS_KEY_ID: "field:access_id"
+    AWS_SECRET_ACCESS_KEY: "field:access_secret"
+    AWS_SESSION_TOKEN: "field:session_token"
+    AWS_EC2_METADATA_DISABLED: "literal:true"
+  verify_args: ["sts", "get-caller-identity", "--endpoint-url", "{{upstream}}"]
+
+lifecycle:
+  plaintext_disk_fallback: false
+  persist_session_token: false
